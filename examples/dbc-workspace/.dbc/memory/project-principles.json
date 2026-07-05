@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "id": "project-principles",
+  "kind": "decision",
+  "title": "DBC safety boundaries",
+  "body": "DBC records git evidence and commit proposals, but git branch, stage, commit, push, reset, clean, deploy, and release publication remain manual operator actions.",
+  "tags": [
+    "safety",
+    "git",
+    "operator-control"
+  ]
+}

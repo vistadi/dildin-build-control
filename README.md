@@ -1,6 +1,36 @@
 # Dildin Build Control
 
-Desktop MVP shell for the DBC technical specification.
+DBC is a local-first desktop control tower for AI-assisted software delivery. It turns agent work into an auditable loop: task contract, provider routing, preflight gates, implementation, build/test evidence, review, security checks, acceptance package, and manual git handoff.
+
+The project is built for operators who want the speed of CLI coding agents without losing control of scope, approvals, command policy, evidence, or rollback.
+
+## Why DBC
+
+- **Loop engineering over chat transcripts.** Every run has a state machine, task contract, artifacts, evidence, gates, and an acceptance decision.
+- **Human approval stays explicit.** DBC does not branch, stage, commit, push, deploy, reset, or run destructive commands automatically.
+- **Provider-agnostic local execution.** Mock, Codex CLI, Claude Code CLI, generic CLI, and local terminal runners can be routed by role.
+- **Portable project memory.** `.dbc` contracts describe providers, command policy, tasks, memory, approvals, loop manifests, evidence, and reports.
+- **Security by default.** Secret-like prompt content blocks real provider sends, output is redacted, and sensitive actions stay approval-gated.
+
+## Demo
+
+![Control Tower](docs/screenshots/01-control-tower.png)
+
+![Preflight Gates](docs/screenshots/03-preflight-gates.png)
+
+![Evidence Reports](docs/screenshots/06-reports-evidence.png)
+
+More demo shots are indexed in [docs/demo/README.md](docs/demo/README.md).
+
+## Project Docs
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Loop Engineering Manifesto](docs/LOOP_ENGINEERING_MANIFESTO.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Good First Issues](docs/GOOD_FIRST_ISSUES.md)
+- [Example .dbc Workspace](examples/dbc-workspace/.dbc/README.md)
+- [Demo Project](examples/demo-project/README.md)
+- [Launch Post Drafts](docs/LAUNCH_POSTS.md)
 
 ## Operator Guide
 
@@ -58,7 +88,7 @@ The verified web shell runs through Vite. Native Tauri builds require Rust/Cargo
 - Do not commit `.dbc/`, `node_modules/`, `dist/`, `src-tauri/target/`, `.env*`, local logs, release packages, or provider credentials.
 - Use `docs/cli-profiles.example.yaml` as the portable provider configuration example.
 - Run `pnpm build` and `cargo test --manifest-path src-tauri/Cargo.toml` before opening a release PR or tag.
-- This repository does not declare an open-source license yet. Add a `LICENSE` file before accepting outside contributions or publishing under a specific license.
+- Licensed under Apache-2.0. See [LICENSE](LICENSE).
 
 ## Configure CLI Providers
 

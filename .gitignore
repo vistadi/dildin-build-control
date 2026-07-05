@@ -11,6 +11,10 @@ src-tauri/gen/android/
 
 # Local DBC runtime data and generated evidence
 .dbc/
+!examples/
+!examples/dbc-workspace/
+!examples/dbc-workspace/.dbc/
+!examples/dbc-workspace/.dbc/**
 
 # Environment and local machine files
 .env

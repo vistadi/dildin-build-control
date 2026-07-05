@@ -1,0 +1,63 @@
+version: 1
+name: Example Mock Workspace
+description: Safe public example provider profile for DBC demos.
+
+providers:
+  mock:
+    name: Mock Provider
+    type: mock
+    enabled: true
+    capabilities:
+      - plan
+      - write_code
+      - review_diff
+      - security_review
+      - structured_output
+
+  local_terminal:
+    name: Local Terminal Runner
+    type: local_runner
+    enabled: true
+    capabilities:
+      - run_build
+      - run_tests
+      - git_status
+      - git_diff
+    policy:
+      commandMode: classify_before_run
+
+roleMapping:
+  team_lead:
+    provider: mock
+    mode: read_only
+    fallbackProviders: []
+  architect:
+    provider: mock
+    mode: review_only
+    fallbackProviders: []
+  developer:
+    provider: mock
+    mode: write_workspace
+    fallbackProviders: []
+  qa:
+    provider: mock
+    mode: review_only
+    localCommands:
+      - pnpm build
+    fallbackProviders: []
+  reviewer:
+    provider: mock
+    mode: review_only
+    fallbackProviders: []
+  security:
+    provider: mock
+    mode: read_only
+    fallbackProviders: []
+  devops:
+    provider: local_terminal
+    mode: approval_required
+    fallbackProviders: []
+  product_owner:
+    provider: mock
+    mode: read_only
+    fallbackProviders: []

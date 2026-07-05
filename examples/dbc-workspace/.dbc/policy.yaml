@@ -1,0 +1,45 @@
+version: 1
+
+commandPolicy:
+  allow:
+    - git status
+    - git diff
+    - pnpm build
+    - npm run build
+    - cargo test
+
+  approvalRequired:
+    - git push
+    - git reset
+    - git clean
+    - deploy
+    - migration
+    - ssh
+    - scp
+    - kubectl
+    - terraform apply
+    - docker compose up
+    - edit .env
+
+  deny:
+    - rm -rf /
+    - mkfs
+    - dd if=
+    - credential exfiltration
+    - private key
+    - write outside workspace
+
+redaction:
+  enabled: true
+  patterns:
+    - api keys
+    - bearer tokens
+    - passwords
+    - private keys
+    - database urls with credentials
+    - .env values
+
+safety:
+  manualGitOnly: true
+  requireApprovalForRealProviders: true
+  blockSecretLikePrompts: true

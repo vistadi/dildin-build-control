@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "id": "README-SMOKE",
+  "title": "README smoke polish",
+  "brief": "Make one small README wording improvement and verify the project still builds.",
+  "acceptanceCriteria": [
+    "README.md remains accurate",
+    "Only README.md is changed",
+    "Build evidence is captured"
+  ],
+  "allowedPaths": [
+    "README.md"
+  ],
+  "deniedPaths": [
+    ".env",
+    ".dbc/providers.yaml",
+    ".dbc/policy.yaml"
+  ],
+  "priority": "low",
+  "risk": "low",
+  "loopProfile": "mock",
+  "providerStrategy": "mock-only",
+  "budgetLimit": 1,
+  "reviewers": [
+    "qa",
+    "reviewer",
+    "security"
+  ],
+  "stopConditions": [
+    "A secret-like value appears in prompt or output",
+    "A file outside allowedPaths is changed",
+    "A command requires approval"
+  ]
+}

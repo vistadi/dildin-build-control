@@ -1,0 +1,48 @@
+name: Good first issue
+description: A scoped task suitable for new contributors.
+title: "[Good first issue]: "
+labels:
+  - good first issue
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping with DBC. Keep the task small, avoid secrets/local paths, and preserve the manual git and approval boundaries.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What needs to be improved?
+      placeholder: Describe the current gap.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Suggested scope
+      description: Which files or docs are likely involved?
+      placeholder: Example: docs/GOOD_FIRST_ISSUES.md only.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How will a maintainer know this is done?
+      placeholder: |
+        - Documentation renders on GitHub.
+        - No generated .dbc runtime output is committed.
+        - pnpm build still passes if source changed.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checklist
+      options:
+        - label: This task does not require real provider credentials.
+          required: true
+        - label: This task does not require git push, deploy, reset, clean, or destructive commands.
+          required: true
+        - label: This task should not commit `.dbc/` runtime output, `.env`, `dist`, `node_modules`, or build targets.
+          required: true

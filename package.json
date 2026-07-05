@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Dildin Build Control desktop MVP shell",
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
