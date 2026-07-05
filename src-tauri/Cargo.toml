@@ -1,0 +1,17 @@
+[package]
+name = "dildin-build-control"
+version = "0.1.0"
+description = "Dildin Build Control desktop shell"
+authors = ["Dildin Build Control"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tauri = { version = "2", features = [] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+time = { version = "0.3", features = ["formatting"] }

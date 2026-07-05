@@ -1,0 +1,52 @@
+{
+  "name": "dildin-build-control",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dildin Build Control desktop MVP shell",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "controlled-smoke": "node scripts/controlled-smoke.mjs",
+    "real-readiness": "node scripts/real-readiness.mjs",
+    "real-micro-plan": "node scripts/real-micro-plan.mjs",
+    "compare-real-micro": "node scripts/compare-real-micro.mjs",
+    "task-intake": "node scripts/task-intake.mjs",
+    "provider-contracts": "node scripts/provider-contracts.mjs",
+    "provider-sessions": "node scripts/provider-sessions.mjs",
+    "operator-checklist": "node scripts/operator-checklist.mjs",
+    "operator-approve": "node scripts/operator-approve.mjs",
+    "approval-ledger": "node scripts/approval-ledger.mjs",
+    "approval-queue": "node scripts/approval-queue.mjs",
+    "loop-state-machine": "node scripts/loop-state-machine.mjs",
+    "run-journal": "node scripts/run-journal.mjs",
+    "real-micro-preflight": "node scripts/real-micro-preflight.mjs",
+    "real-micro-runbook": "node scripts/real-micro-runbook.mjs",
+    "evidence-summary": "node scripts/evidence-summary.mjs",
+    "revert-evidence": "node scripts/revert-evidence.mjs",
+    "support-bundle": "node scripts/support-bundle.mjs",
+    "launch-doctor": "node scripts/launch-doctor.mjs",
+    "system-audit": "node scripts/system-audit.mjs",
+    "release-package": "node scripts/release-package.mjs",
+    "providers:status": "node scripts/provider-profile.mjs status",
+    "providers:profiles": "node scripts/provider-profile.mjs generate",
+    "providers:apply-real-micro": "node scripts/provider-profile.mjs apply-real-micro",
+    "providers:apply-mock": "node scripts/provider-profile.mjs apply-mock",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.5.0",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.5.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.2"
+  }
+}

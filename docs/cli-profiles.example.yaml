@@ -1,0 +1,159 @@
+version: 1
+name: Codex Builder + Claude Reviewer
+description: Codex writes implementation changes, Claude Code reviews, QA-analyzes, and security-checks the result.
+
+providers:
+  codex_cli:
+    name: Codex CLI
+    type: cli
+    enabled: true
+    command: codex
+    argsTemplate: exec --skip-git-repo-check --sandbox workspace-write --cd "{{cwd}}"
+    promptMode: stdin
+    timeoutSeconds: 900
+    maxOutputBytes: 200000
+    capabilities:
+      - plan
+      - write_code
+      - generate_tests
+      - structured_output
+    policy:
+      filesystemMode: write_workspace
+      commandMode: approval_for_sensitive
+
+  claude_code:
+    name: Claude Code
+    type: cli
+    enabled: true
+    command: claude
+    promptMode: stdin
+    timeoutSeconds: 900
+    maxOutputBytes: 200000
+    capabilities:
+      - review_diff
+      - analyze_logs
+      - security_review
+      - structured_output
+    policy:
+      filesystemMode: read_only
+      commandMode: no_commands
+
+  local_terminal:
+    name: Local Terminal Runner
+    type: local_runner
+    enabled: true
+    capabilities:
+      - run_build
+      - run_tests
+      - git_status
+      - git_diff
+    policy:
+      commandMode: classify_before_run
+
+roleMapping:
+  team_lead:
+    provider: codex_cli
+    mode: read_only
+    fallbackProviders:
+      - claude_code
+
+  architect:
+    provider: claude_code
+    mode: review_only
+    fallbackProviders: []
+
+  developer:
+    provider: codex_cli
+    mode: write_workspace
+    fallbackProviders: []
+
+  qa:
+    provider: claude_code
+    mode: review_only
+    localCommands:
+      - pnpm build
+      - pnpm test
+    fallbackProviders: []
+
+  reviewer:
+    provider: claude_code
+    mode: review_only
+    fallbackProviders: []
+
+  security:
+    provider: claude_code
+    mode: read_only
+    fallbackProviders: []
+
+  devops:
+    provider: local_terminal
+    mode: approval_required
+    fallbackProviders: []
+
+  product_owner:
+    provider: codex_cli
+    mode: read_only
+    fallbackProviders:
+      - claude_code
+
+commandPolicy:
+  allow:
+    - git status
+    - git diff
+    - pnpm build
+    - pnpm test
+    - pnpm lint
+    - npm run build
+    - npm test
+    - cargo test
+    - python -m pytest
+
+  approvalRequired:
+    - git push
+    - git reset --hard
+    - git clean
+    - deploy
+    - migration
+    - ssh
+    - scp
+    - kubectl
+    - terraform apply
+    - docker compose up
+    - edit .env
+
+  deny:
+    - rm -rf /
+    - mkfs
+    - dd if=
+    - credential exfiltration
+    - write outside workspace
+
+redaction:
+  enabled: true
+  patterns:
+    - api keys
+    - bearer tokens
+    - passwords
+    - private keys
+    - database urls with credentials
+    - .env values
+
+loopTemplates:
+  feature:
+    maxIterations: 3
+    budgetLimitUsd: 10
+    steps:
+      - id: plan
+        role: team_lead
+      - id: implement
+        role: developer
+      - id: build
+        role: local_terminal
+      - id: qa
+        role: qa
+      - id: review
+        role: reviewer
+      - id: security
+        role: security
+      - id: acceptance
+        role: product_owner
