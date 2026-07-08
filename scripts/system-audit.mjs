@@ -434,10 +434,19 @@ function checkLaunchDoctor(value) {
     fail("launch doctor", "Invalid launch doctor kind.");
     return;
   }
-  if (value.blockers?.length) {
-    fail("launch doctor", `${value.blockers.length} blocker(s).`);
+  const blockers = value.blockers || [];
+  const externalBlockers = blockers.filter((item) => {
+    const subject = String(item.subject || "");
+    return subject !== "system-audit" && subject !== "system audit: launch doctor";
+  });
+  const selfReferentialBlockers = blockers.length - externalBlockers.length;
+  if (externalBlockers.length) {
+    fail("launch doctor", `${externalBlockers.length} blocker(s).`);
   } else {
     pass("launch doctor", value.status || "ok");
+    if (selfReferentialBlockers) {
+      warn("launch doctor stale self-check", `${selfReferentialBlockers} self-referential blocker(s) ignored; rerun launch-doctor to refresh.`);
+    }
   }
 }
 

@@ -33,6 +33,7 @@ import { loadState, resetState, saveState, uid } from "./storage";
 import {
   advanceBackendLoop,
   advanceHarnessRun,
+  acceptOrReworkHarnessResult,
   approveTaskContract,
   approveWorkSlice,
   approveOperatorGate,
@@ -118,6 +119,7 @@ type View =
   | "home"
   | "projects"
   | "workspace"
+  | "guided"
   | "tasks"
   | "preflight"
   | "agents"
@@ -130,6 +132,7 @@ const navItems: Array<{ id: View; label: string; icon: typeof Home }> = [
   { id: "home", label: "Control Tower", icon: Home },
   { id: "projects", label: "Projects", icon: FolderGit2 },
   { id: "workspace", label: "Workspace", icon: Boxes },
+  { id: "guided", label: "Guided Run", icon: ClipboardCheck },
   { id: "tasks", label: "Tasks", icon: ListChecks },
   { id: "preflight", label: "Preflight", icon: Gauge },
   { id: "agents", label: "AI Team", icon: Bot },
@@ -1195,10 +1198,10 @@ export function App() {
     }
   }
 
-  async function startSimpleHarnessForTask(taskId: string) {
+  async function startSimpleHarnessForTask(taskId: string, taskOverride?: Task) {
     const snapshot = stateRef.current;
     const project = snapshot.projects.find((item) => item.id === snapshot.activeProjectId) ?? snapshot.projects[0];
-    const task = snapshot.tasks.find((item) => item.id === taskId);
+    const task = taskOverride ?? snapshot.tasks.find((item) => item.id === taskId);
     if (!project || !task) return;
 
     try {
@@ -1262,6 +1265,11 @@ export function App() {
     } catch (error) {
       recordHarnessError("Simple Harness start failed", error);
     }
+  }
+
+  async function createTaskAndStartSafe(task: Task) {
+    createTask(task);
+    await startSimpleHarnessForTask(task.id, task);
   }
 
   async function startHarnessForTask(taskId: string) {
@@ -1336,6 +1344,28 @@ export function App() {
       }));
     } catch (error) {
       recordHarnessError("EvidencePack generation failed", error);
+    }
+  }
+
+  async function decideHarnessResult(runId: string, decision: "accepted" | "rework" | "rejected", note: string) {
+    try {
+      const run = await acceptOrReworkHarnessResult(runId, decision, note);
+      await refreshHarnessOverview(run.projectPath);
+      setState((current) => ({
+        ...current,
+        audit: [
+          {
+            id: uid("AUD"),
+            time: currentTime(),
+            actor: "Product Owner",
+            action: "Harness result decision",
+            result: `${run.id}: ${decision}${note ? ` - ${note}` : ""}`,
+          },
+          ...current.audit,
+        ],
+      }));
+    } catch (error) {
+      recordHarnessError("Harness result decision failed", error);
     }
   }
 
@@ -1803,9 +1833,9 @@ export function App() {
                 Stop loop
               </button>
             ) : (
-              <button className="primary-btn" onClick={() => startLoop()}>
-                <Play size={16} />
-                Start provider loop
+              <button className="primary-btn" onClick={() => setView("guided")}>
+                <ClipboardCheck size={16} />
+                Guided run
               </button>
             )}
           </div>
@@ -1847,6 +1877,8 @@ export function App() {
             onRunApprovedRealMicro={runApprovedRealMicroTask}
             onApplyProviderProfile={applyProviderProfileFromHome}
             onOpenRealMicroPreflight={openRealMicroPreflight}
+            onNavigate={setView}
+            harnessOverview={harnessOverview}
             state={state}
           />
         )}
@@ -1879,6 +1911,7 @@ export function App() {
             activeProject={activeProject}
             harnessOverview={harnessOverview}
             createTask={createTask}
+            createTaskAndStart={createTaskAndStartSafe}
             saveTaskContract={saveTaskContract}
             startSimpleHarnessForTask={startSimpleHarnessForTask}
             createHarnessContract={createHarnessContract}
@@ -1900,6 +1933,21 @@ export function App() {
             operatorChecklist={operatorChecklist}
             onRun={(task) => startLoop(task, true)}
             onBack={() => setView("tasks")}
+          />
+        )}
+        {view === "guided" && (
+          <GuidedRunView
+            state={state}
+            activeProject={activeProject}
+            harnessOverview={harnessOverview}
+            currentLoop={currentLoop}
+            createTaskAndStart={createTaskAndStartSafe}
+            startSafeRun={startSimpleHarnessForTask}
+            saveTaskContract={saveTaskContract}
+            onAdvanceHarness={advanceHarness}
+            onGenerateEvidencePack={generateHarnessPack}
+            onDecideHarnessResult={decideHarnessResult}
+            onNavigate={setView}
           />
         )}
         {view === "agents" && (
@@ -1941,7 +1989,15 @@ export function App() {
             onRefreshApprovalQueue={() => refreshApprovalQueue()}
           />
         )}
-        {view === "reports" && <ReportsView state={state} totalCost={totalCost} currentLoop={currentLoop} harnessOverview={harnessOverview} />}
+        {view === "reports" && (
+          <ReportsView
+            state={state}
+            totalCost={totalCost}
+            currentLoop={currentLoop}
+            harnessOverview={harnessOverview}
+            onDecideHarnessResult={decideHarnessResult}
+          />
+        )}
         {view === "settings" && (
           <SettingsView
             state={state}
@@ -1992,6 +2048,8 @@ function HomeView({
   onRunApprovedRealMicro,
   onApplyProviderProfile,
   onOpenRealMicroPreflight,
+  onNavigate,
+  harnessOverview,
   state,
 }: {
   activeProject: AppState["projects"][number];
@@ -2028,10 +2086,26 @@ function HomeView({
   onRunApprovedRealMicro: () => void;
   onApplyProviderProfile: (profile: "mock" | "real-micro") => void;
   onOpenRealMicroPreflight: () => void;
+  onNavigate: (view: View) => void;
+  harnessOverview: HarnessOverview;
   state: AppState;
 }) {
   const realMicroTaskLoaded = state.tasks.some((task) => task.id === "REAL-MICRO-README" || task.loopProfile === "real_micro");
   const realProviderCount = state.providers.filter((provider) => provider.type === "cli" && provider.runMode === "real").length;
+  const activeTask = state.tasks.find((task) => task.status !== "done") ?? state.tasks[0];
+  const latestRun = harnessOverview.runs[0];
+  const latestPack = harnessOverview.evidencePacks[0];
+  const waitingGates = buildHarnessApprovalGates(harnessOverview).filter((gate) => gate.status === "waiting_approval").length;
+  const workflowNext =
+    !activeTask
+      ? { label: "Create first task", detail: "Paste the TZ into Guided Run and start from a safe run.", view: "guided" as View, tone: "warning" as const }
+      : pendingApprovals > 0 || waitingGates > 0
+        ? { label: "Review approvals", detail: `${pendingApprovals + waitingGates} approval gate(s) need a human decision.`, view: "approvals" as View, tone: "warning" as const }
+        : !latestRun
+          ? { label: "Start safe run", detail: `${activeTask.id} is ready for TaskContract, WorkSlice, and HarnessRun.`, view: "guided" as View, tone: "ok" as const }
+          : latestPack
+            ? { label: "Make final decision", detail: `${latestPack.id} is ready for accept, rework, or reject.`, view: "reports" as View, tone: "ok" as const }
+            : { label: "Monitor Harness run", detail: `${latestRun.id} is at ${displayValue(latestRun.status)}.`, view: "loops" as View, tone: "ok" as const };
 
   return (
     <section className="view-stack">
@@ -2059,6 +2133,47 @@ function HomeView({
         <Metric icon={AlertTriangle} label="Pending approvals" value={String(pendingApprovals)} hint="Sensitive actions blocked" />
         <Metric icon={CircleDollarSign} label="Estimated cost" value={`$${totalCost.toFixed(2)}`} hint="Mock adapter events" />
       </div>
+
+      <Panel
+        title="Current Workflow"
+        icon={ListChecks}
+        action={
+          <button className="primary-btn compact-btn" onClick={() => onNavigate(workflowNext.view)}>
+            <ChevronRight size={16} />
+            {workflowNext.label}
+          </button>
+        }
+      >
+        <OperatorHint
+          step="Operator next action"
+          title={workflowNext.label}
+          detail={workflowNext.detail}
+          status={workflowNext.tone === "ok" ? "ready" : "waiting"}
+        />
+        <DecisionStrip
+          items={[
+            { label: "Task", value: activeTask ? activeTask.id : "missing", tone: activeTask ? "ok" : "warning" },
+            { label: "HarnessRun", value: latestRun ? displayValue(latestRun.status) : "not started", tone: latestRun ? "ok" : "warning" },
+            { label: "Approvals", value: String(pendingApprovals + waitingGates), tone: pendingApprovals + waitingGates ? "warning" : "ok" },
+            { label: "EvidencePack", value: latestPack ? displayValue(latestPack.status) : "not generated", tone: latestPack ? "ok" : "warning" },
+          ]}
+        />
+        <div className="workflow-steps">
+          {[
+            ["1", "Task", activeTask ? activeTask.title : "Create task from TZ"],
+            ["2", "Contract", harnessOverview.contracts[0]?.status ?? "not created"],
+            ["3", "WorkSlice", harnessOverview.slices[0]?.status ?? "not created"],
+            ["4", "Run", latestRun?.currentStage ?? "not started"],
+            ["5", "Decision", latestPack?.finalDecision || "pending"],
+          ].map(([step, title, detail]) => (
+            <div className="workflow-step" key={title}>
+              <span>{step}</span>
+              <strong>{title}</strong>
+              <p>{detail}</p>
+            </div>
+          ))}
+        </div>
+      </Panel>
 
       <div className="two-column">
         <Panel title="Active Loop" icon={RotateCcw}>
@@ -2805,6 +2920,347 @@ function WorkspaceView({
   );
 }
 
+function GuidedRunView({
+  state,
+  activeProject,
+  harnessOverview,
+  currentLoop,
+  createTaskAndStart,
+  startSafeRun,
+  saveTaskContract,
+  onAdvanceHarness,
+  onGenerateEvidencePack,
+  onDecideHarnessResult,
+  onNavigate,
+}: {
+  state: AppState;
+  activeProject?: AppState["projects"][number];
+  harnessOverview: HarnessOverview;
+  currentLoop: LoopRunSnapshot | null;
+  createTaskAndStart: (task: Task) => Promise<void> | void;
+  startSafeRun: (taskId: string) => Promise<void> | void;
+  saveTaskContract: (taskId: string) => void;
+  onAdvanceHarness: (run: HarnessRun) => void;
+  onGenerateEvidencePack: (run: HarnessRun) => void;
+  onDecideHarnessResult: (runId: string, decision: "accepted" | "rework" | "rejected", note: string) => Promise<void> | void;
+  onNavigate: (view: View) => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [tz, setTz] = useState("");
+  const [acceptance, setAcceptance] = useState("Build passes\nReview has no critical findings\nEvidencePack contains contract, run, tests, review, security, and final decision");
+  const [allowedPaths, setAllowedPaths] = useState("src\nsrc-tauri\nREADME.md\ndocs\n.dbc");
+  const [outOfScope, setOutOfScope] = useState(".env\nnode_modules\nsrc-tauri/target\ndist");
+  const [decisionNote, setDecisionNote] = useState("");
+  const activeTask = state.tasks[0];
+  const latestContract = activeTask ? latestContractForTask(activeTask.id, harnessOverview.contracts) : undefined;
+  const latestSlice = activeTask ? latestSliceForTask(activeTask.id, harnessOverview.slices) : undefined;
+  const latestRun = activeTask
+    ? harnessOverview.runs.find((run) => run.taskId === activeTask.id) ?? harnessOverview.runs[0]
+    : harnessOverview.runs[0];
+  const latestPack = latestRun
+    ? harnessOverview.evidencePacks.find((pack) => pack.harnessRunId === latestRun.id) ?? harnessOverview.evidencePacks[0]
+    : harnessOverview.evidencePacks[0];
+  const pendingApprovals = state.approvals.filter((approval) => approval.status === "pending");
+  const allStepsPassed = state.loopSteps.length > 0 && state.loopSteps.every((step) => step.status === "passed");
+  const hasEvidenceLinks = state.loopSteps.some((step) => step.evidencePath || step.artifactPath);
+  const hasStructuredReview = state.loopSteps.some((step) => step.structuredReport);
+  const readyForAccept = Boolean(latestRun && latestPack && allStepsPassed && pendingApprovals.length === 0);
+  const activeRunCanAdvance = Boolean(latestRun && !["accepted", "rejected", "blocked", "shipped"].includes(latestRun.status));
+  const activeRunCanPack = Boolean(latestRun && ["evidence_ready", "accepted", "rework"].includes(latestRun.status));
+  const completeness = [
+    Boolean(activeTask),
+    Boolean(latestContract),
+    Boolean(latestSlice),
+    Boolean(latestRun),
+    allStepsPassed,
+    hasEvidenceLinks,
+    hasStructuredReview,
+    Boolean(latestPack),
+    pendingApprovals.length === 0,
+  ].filter(Boolean).length;
+  const currentStage =
+    !activeTask
+      ? "paste_tz"
+      : !latestRun
+        ? "ready_to_run"
+        : !latestPack
+          ? latestRun.status === "evidence_ready"
+            ? "evidence_ready"
+            : "running"
+          : readyForAccept
+            ? "decision_ready"
+            : "review_evidence";
+
+  function buildGuidedTask(): Task | null {
+    if (!title.trim() || !tz.trim()) return null;
+    const allowed = lines(allowedPaths);
+    return {
+      id: taskIdFromTitle(title),
+      title: title.trim(),
+      brief: tz.trim(),
+      criteria: lines(acceptance).length ? lines(acceptance) : ["Acceptance evidence is complete."],
+      constraints: [
+        "Keep work inside approved scope.",
+        "Use safe/mock execution until real provider approval is granted.",
+        "Stop if command policy returns approval_required or deny.",
+      ],
+      budgetLimit: 1,
+      risk: "medium",
+      priority: "normal",
+      loopProfile: "mock",
+      providerStrategy: "codex_build_claude_review",
+      affectedPaths: allowed,
+      allowedPaths: allowed,
+      deniedPaths: lines(outOfScope),
+      requiredReviewers: ["Reviewer", "Security", "Product Owner"],
+      stopConditions: [
+        "Stop if changes touch forbidden paths.",
+        "Stop if evidence pack cannot be generated.",
+        "Stop if human approval is required for real provider or command execution.",
+      ],
+      status: "ready",
+    };
+  }
+
+  async function createAndRun() {
+    const task = buildGuidedTask();
+    if (!task) return;
+    await createTaskAndStart(task);
+    setTitle("");
+    setTz("");
+  }
+
+  async function decide(decision: "accepted" | "rework" | "rejected") {
+    if (!latestRun) return;
+    await onDecideHarnessResult(latestRun.id, decision, decisionNote.trim());
+  }
+
+  const wizardSteps = [
+    { label: "TZ", done: Boolean(activeTask), detail: activeTask ? activeTask.title : "Paste task brief" },
+    { label: "Contract", done: Boolean(latestContract), detail: latestContract?.status ?? "not created" },
+    { label: "Slice", done: Boolean(latestSlice), detail: latestSlice?.status ?? "not created" },
+    { label: "Run", done: Boolean(latestRun), detail: latestRun?.status ?? "not started" },
+    { label: "Evidence", done: Boolean(latestPack), detail: latestPack?.status ?? "not generated" },
+    { label: "Decision", done: Boolean(latestPack?.finalDecision), detail: latestPack?.finalDecision || "pending" },
+  ];
+
+  return (
+    <section className="view-stack guided-run">
+      <Panel
+        title="Guided Run"
+        icon={ClipboardCheck}
+        action={
+          <div className="action-toolbar">
+            <button className="ghost-btn compact-btn" onClick={() => onNavigate("settings")}>
+              <KeyRound size={16} />
+              Setup
+            </button>
+            <button className="ghost-btn compact-btn" onClick={() => onNavigate("approvals")}>
+              <ShieldCheck size={16} />
+              Approvals
+            </button>
+            <button className="ghost-btn compact-btn" onClick={() => onNavigate("reports")}>
+              <FileText size={16} />
+              Reports
+            </button>
+          </div>
+        }
+      >
+        <OperatorHint
+          step="Production path"
+          title={
+            currentStage === "paste_tz"
+              ? "Paste a TZ and start a safe Harness run"
+              : currentStage === "ready_to_run"
+                ? "Task is ready for a safe Harness run"
+                : currentStage === "evidence_ready"
+                  ? "Generate the Evidence Pack"
+                  : currentStage === "decision_ready"
+                    ? "Make the final decision"
+                    : "Continue the Harness lifecycle"
+          }
+          detail="This screen is the normal user path. Expert screens remain available, but the complete lifecycle should be operable from here."
+          status={readyForAccept ? "ready" : currentStage === "paste_tz" ? "waiting" : "running"}
+        />
+        <DecisionStrip
+          items={[
+            { label: "Completeness", value: `${completeness}/9`, tone: completeness >= 8 ? "ok" : completeness >= 4 ? "warning" : "failed" },
+            { label: "Current stage", value: displayValue(currentStage), tone: currentStage === "decision_ready" ? "ok" : "warning" },
+            { label: "Pending approvals", value: String(pendingApprovals.length), tone: pendingApprovals.length ? "warning" : "ok" },
+            { label: "Runtime", value: isTauriRuntime() ? "desktop" : "browser preview", tone: isTauriRuntime() ? "ok" : "warning" },
+          ]}
+        />
+        <div className="guided-stepper">
+          {wizardSteps.map((step, index) => (
+            <article className={step.done ? "guided-step done" : "guided-step"} key={step.label}>
+              <span>{index + 1}</span>
+              <strong>{step.label}</strong>
+              <p>{displayValue(step.detail)}</p>
+            </article>
+          ))}
+        </div>
+      </Panel>
+
+      <div className="two-column guided-grid">
+        <Panel title="1. Task From TZ" icon={FileText}>
+          <div className="task-composer">
+            <div className="composer-grid">
+              <label>
+                Product task title
+                <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Implement the first usable billing screen" />
+              </label>
+              <label className="wide-field">
+                TZ / request
+                <textarea value={tz} onChange={(event) => setTz(event.target.value)} placeholder="Paste the task, context, constraints, and expected product result." />
+              </label>
+            </div>
+            <div className="composer-grid two-up">
+              <label>
+                Acceptance criteria
+                <textarea value={acceptance} onChange={(event) => setAcceptance(event.target.value)} />
+              </label>
+              <label>
+                Allowed paths
+                <textarea value={allowedPaths} onChange={(event) => setAllowedPaths(event.target.value)} />
+              </label>
+              <label>
+                Out of scope / forbidden paths
+                <textarea value={outOfScope} onChange={(event) => setOutOfScope(event.target.value)} />
+              </label>
+              <div className="guided-action-card">
+                <strong>Recommended start</strong>
+                <p>DBC creates the task, freezes/approves a safe contract path, creates a WorkSlice, and starts HarnessRun in safe mode.</p>
+                <button className="primary-btn" onClick={createAndRun} disabled={!title.trim() || !tz.trim()}>
+                  <Play size={16} />
+                  Create and start safe run
+                </button>
+              </div>
+            </div>
+          </div>
+        </Panel>
+
+        <Panel title="2. Current Contract & Slice" icon={ListChecks}>
+          {activeTask ? (
+            <div className="contract-preview">
+              <span className={`status-pill ${activeTask.status}`}>{displayValue(activeTask.status)}</span>
+              <strong>{activeTask.title}</strong>
+              <p>{activeTask.brief}</p>
+              <div className="stack-row">
+                <span>{activeTask.risk}</span>
+                <span>{activeTask.loopProfile}</span>
+                <span>{activeTask.providerStrategy}</span>
+              </div>
+              <code>Task: {activeTask.id}</code>
+              <code>Contract: {latestContract ? `${latestContract.id} · ${latestContract.status}` : "not created"}</code>
+              <code>WorkSlice: {latestSlice ? `${latestSlice.id} · ${latestSlice.status}` : "not created"}</code>
+              <div className="button-row">
+                <button className="ghost-btn" onClick={() => saveTaskContract(activeTask.id)}>
+                  <FileText size={16} />
+                  Save spec
+                </button>
+                <button className="primary-btn" onClick={() => startSafeRun(activeTask.id)} disabled={Boolean(latestRun)}>
+                  <Play size={16} />
+                  Start safe run
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="empty-state">
+              <span className="status-pill warning">waiting</span>
+              <strong>No active task yet</strong>
+              <p>Paste a TZ on the left. This is the first production step.</p>
+            </div>
+          )}
+        </Panel>
+      </div>
+
+      <div className="two-column guided-grid">
+        <Panel title="3. Execute & Advance" icon={RotateCcw}>
+          {latestRun ? (
+            <div className="audit-list">
+              <div className="audit-row">
+                <span className={`status-pill ${statusClass(latestRun.status)}`}>{displayValue(latestRun.status)}</span>
+                <strong>{latestRun.id}</strong>
+                <p>Stage {displayValue(latestRun.currentStage)}; compatible loop {latestRun.compatibilityLoopRunId || "pending"}.</p>
+                <code>{latestRun.manifestPath}</code>
+              </div>
+              <div className="button-row">
+                <button className="primary-btn" onClick={() => onAdvanceHarness(latestRun)} disabled={!activeRunCanAdvance}>
+                  <ChevronRight size={16} />
+                  Advance run
+                </button>
+                <button className="ghost-btn" onClick={() => onNavigate("loops")}>
+                  <TerminalSquare size={16} />
+                  Open loop console
+                </button>
+              </div>
+              {currentLoop ? (
+                <div className="audit-row">
+                  <span className={`status-pill ${statusClass(currentLoop.status)}`}>{displayValue(currentLoop.status)}</span>
+                  <strong>{currentLoop.taskTitle || currentLoop.taskId}</strong>
+                  <p>{currentLoop.reportMarkdownPath || currentLoop.manifestPath || "Loop report pending."}</p>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="empty-state">
+              <span className="status-pill warning">not started</span>
+              <strong>No HarnessRun yet</strong>
+              <p>Create and start a safe run from the TZ step.</p>
+            </div>
+          )}
+        </Panel>
+
+        <Panel title="4. Evidence & Decision" icon={BadgeCheck}>
+          <div className="decision-box">
+            <DecisionStrip
+              items={[
+                { label: "Steps passed", value: allStepsPassed ? "yes" : "no", tone: allStepsPassed ? "ok" : "warning" },
+                { label: "Evidence links", value: hasEvidenceLinks ? "present" : "missing", tone: hasEvidenceLinks ? "ok" : "warning" },
+                { label: "Review/security", value: hasStructuredReview ? "present" : "missing", tone: hasStructuredReview ? "ok" : "warning" },
+                { label: "Pack", value: latestPack ? displayValue(latestPack.status) : "missing", tone: latestPack ? "ok" : "warning" },
+              ]}
+            />
+            <div className="button-row">
+              <button className="primary-btn" onClick={() => latestRun && onGenerateEvidencePack(latestRun)} disabled={!activeRunCanPack}>
+                <ClipboardCheck size={16} />
+                Generate EvidencePack
+              </button>
+              <button className="ghost-btn" onClick={() => onNavigate("reports")}>
+                <FileText size={16} />
+                Open report
+              </button>
+            </div>
+            <label>
+              Final decision note
+              <textarea value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} placeholder="Decision reason, remaining risk, or rework request." />
+            </label>
+            <div className="decision-actions">
+              <button className="primary-btn" onClick={() => decide("accepted")} disabled={!readyForAccept}>
+                <CheckCircle2 size={16} />
+                Accept
+              </button>
+              <button className="warning-btn" onClick={() => decide("rework")} disabled={!latestRun}>
+                <RotateCcw size={16} />
+                Request rework
+              </button>
+              <button className="danger-btn" onClick={() => decide("rejected")} disabled={!latestRun}>
+                <XCircle size={16} />
+                Reject
+              </button>
+            </div>
+            <p className="helper-text">
+              {readyForAccept
+                ? "All primary gates are green. You can accept the result."
+                : "Accept stays disabled until the run, evidence pack, step evidence, and approvals are complete."}
+            </p>
+          </div>
+        </Panel>
+      </div>
+    </section>
+  );
+}
+
 function TasksView({
   tasks,
   agents,
@@ -2812,6 +3268,7 @@ function TasksView({
   activeProject,
   harnessOverview,
   createTask,
+  createTaskAndStart,
   saveTaskContract,
   startSimpleHarnessForTask,
   createHarnessContract,
@@ -2830,6 +3287,7 @@ function TasksView({
   activeProject?: AppState["projects"][number];
   harnessOverview: HarnessOverview;
   createTask: (task: Task) => void;
+  createTaskAndStart: (task: Task) => Promise<void> | void;
   saveTaskContract: (taskId: string) => void;
   startSimpleHarnessForTask: (taskId: string) => void;
   createHarnessContract: (taskId: string) => void;
@@ -2859,12 +3317,19 @@ function TasksView({
   const [loopProfile, setLoopProfile] = useState<TaskLoopProfile>("mock");
   const [providerStrategy, setProviderStrategy] = useState<ProviderStrategy>("codex_build_claude_review");
   const smokeReadiness = buildSmokeReadiness({ activeProject, agents, providers });
+  const affected = lines(affectedPaths);
+  const allowed = lines(allowedPaths);
+  const canSaveTask = Boolean(title.trim() && brief.trim());
+  const intakeReadiness = [
+    { label: "TZ", value: brief.trim() ? "filled" : "missing", tone: brief.trim() ? "ok" as const : "warning" as const },
+    { label: "Acceptance", value: lines(criteria).length ? `${lines(criteria).length} criteria` : "missing", tone: lines(criteria).length ? "ok" as const : "warning" as const },
+    { label: "Scope", value: affected.length || allowed.length ? "bounded" : "broad", tone: affected.length || allowed.length ? "ok" as const : "warning" as const },
+    { label: "Reviewers", value: lines(requiredReviewers).length ? `${lines(requiredReviewers).length} roles` : "missing", tone: lines(requiredReviewers).length ? "ok" as const : "warning" as const },
+  ];
 
-  function submit() {
+  function buildDraftTask() {
     if (!title.trim() || !brief.trim()) return;
-    const affected = lines(affectedPaths);
-    const allowed = lines(allowedPaths);
-    createTask({
+    return {
       id: taskIdFromTitle(title),
       title: title.trim(),
       brief: brief.trim(),
@@ -2881,31 +3346,48 @@ function TasksView({
       requiredReviewers: lines(requiredReviewers),
       stopConditions: lines(stopConditions),
       status: "ready",
-    });
+    } satisfies Task;
+  }
+
+  function resetDraft() {
     setTitle("");
     setBrief("");
     setAffectedPaths("");
     setAllowedPaths("");
   }
 
+  function submit() {
+    const task = buildDraftTask();
+    if (!task) return;
+    createTask(task);
+    resetDraft();
+  }
+
+  async function submitAndStart() {
+    const task = buildDraftTask();
+    if (!task) return;
+    await createTaskAndStart(task);
+    resetDraft();
+  }
+
   return (
     <section className="view-stack">
       <Panel title="Smoke Loop" icon={Gauge}>
-        <div className="provider-form">
-          <label>
+        <div className="form-action-row">
+          <label className="field-fill">
             Safe micro-task
             <input readOnly value="README.md evidence marker + build/evidence verification" />
           </label>
-          <div className="button-row">
-            <button className="ghost-btn" onClick={() => prepareSmokeTest(false)}>
+          <div className="action-toolbar" aria-label="Smoke loop actions">
+            <button className="ghost-btn compact-btn" onClick={() => prepareSmokeTest(false)}>
               <ClipboardCheck size={16} />
-              Prepare smoke task
+              Prepare
             </button>
-            <button className="primary-btn" onClick={() => prepareSmokeTest(true)}>
+            <button className="primary-btn compact-btn" onClick={() => prepareSmokeTest(true)}>
               <Play size={16} />
-              Run smoke loop
+              Run smoke
             </button>
-            <button className="ghost-btn" onClick={runControlledSmoke}>
+            <button className="ghost-btn compact-btn" onClick={runControlledSmoke}>
               <ListChecks size={16} />
               Controlled smoke
             </button>
@@ -2925,96 +3407,154 @@ function TasksView({
       </Panel>
 
       <Panel title="Task Composer" icon={ClipboardCheck}>
-        <div className="form-grid">
-          <label>
-            Task title
-            <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Add auth screen with tests" />
-          </label>
-          <label>
-            Free-form TZ
-            <textarea value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="Describe the expected result, context, constraints, and risks." />
-          </label>
-          <label>
-            Acceptance criteria
-            <textarea value={criteria} onChange={(event) => setCriteria(event.target.value)} />
-          </label>
-          <label>
-            Constraints
-            <textarea value={constraints} onChange={(event) => setConstraints(event.target.value)} />
-          </label>
-          <label>
-            Affected paths
-            <textarea value={affectedPaths} onChange={(event) => setAffectedPaths(event.target.value)} placeholder="src/App.tsx&#10;src-tauri/src/main.rs" />
-          </label>
-          <label>
-            Allowed paths
-            <textarea value={allowedPaths} onChange={(event) => setAllowedPaths(event.target.value)} placeholder="src&#10;README.md&#10;.dbc/tasks" />
-          </label>
-          <label>
-            Denied paths
-            <textarea value={deniedPaths} onChange={(event) => setDeniedPaths(event.target.value)} />
-          </label>
-          <label>
-            Required reviewers
-            <textarea value={requiredReviewers} onChange={(event) => setRequiredReviewers(event.target.value)} />
-          </label>
-          <label>
-            Stop conditions
-            <textarea value={stopConditions} onChange={(event) => setStopConditions(event.target.value)} />
-          </label>
-          <label>
-            Budget
-            <input type="number" min="0" step="1" value={budgetLimit} onChange={(event) => setBudgetLimit(Number(event.target.value))} />
-          </label>
-          <label>
-            Risk
-            <select value={risk} onChange={(event) => setRisk(event.target.value as RiskLevel)}>
-              <option value="low">low</option>
-              <option value="medium">medium</option>
-              <option value="high">high</option>
-              <option value="critical">critical</option>
-            </select>
-          </label>
-          <label>
-            Priority
-            <select value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}>
-              <option value="low">low</option>
-              <option value="normal">normal</option>
-              <option value="high">high</option>
-              <option value="urgent">urgent</option>
-            </select>
-          </label>
-          <label>
-            Loop profile
-            <select value={loopProfile} onChange={(event) => setLoopProfile(event.target.value as TaskLoopProfile)}>
-              <option value="mock">mock</option>
-              <option value="controlled_smoke">controlled_smoke</option>
-              <option value="real_micro">real_micro</option>
-            </select>
-          </label>
-          <label>
-            Provider strategy
-            <select value={providerStrategy} onChange={(event) => setProviderStrategy(event.target.value as ProviderStrategy)}>
-              <option value="codex_build_claude_review">codex_build_claude_review</option>
-              <option value="codex_only">codex_only</option>
-              <option value="claude_review_only">claude_review_only</option>
-              <option value="mock_only">mock_only</option>
-            </select>
-          </label>
-          <div className="button-row">
-            <button className="ghost-btn" onClick={submit}>
-              <Plus size={16} />
-              Save task
-            </button>
-            <button className="primary-btn" onClick={() => startLoop()}>
-              <Play size={16} />
-              Start loop
-            </button>
+        <div className="task-composer">
+          <OperatorHint
+            step="Task intake"
+            title="Turn the TZ into a runnable contract"
+            detail="Start with the expected result, then define acceptance, paths, reviewers, and stop conditions. DBC will use this to create a safe Harness run."
+            status={canSaveTask ? "ready" : "waiting"}
+          />
+          <DecisionStrip items={intakeReadiness} />
+
+          <div className="composer-section primary">
+            <div className="composer-section-head">
+              <span>1</span>
+              <div>
+                <strong>Describe the result</strong>
+                <p>Paste the TZ and name the user-visible outcome.</p>
+              </div>
+            </div>
+            <div className="composer-grid">
+              <label>
+                Task title
+                <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Add auth screen with tests" />
+              </label>
+              <label className="wide-field">
+                Free-form TZ
+                <textarea value={brief} onChange={(event) => setBrief(event.target.value)} placeholder="Describe the expected result, context, constraints, and risks." />
+              </label>
+            </div>
+          </div>
+
+          <div className="composer-section">
+            <div className="composer-section-head">
+              <span>2</span>
+              <div>
+                <strong>Define acceptance and boundaries</strong>
+                <p>Make the work measurable and keep the agent inside safe paths.</p>
+              </div>
+            </div>
+            <div className="composer-grid two-up">
+              <label>
+                Acceptance criteria
+                <textarea value={criteria} onChange={(event) => setCriteria(event.target.value)} />
+              </label>
+              <label>
+                Constraints
+                <textarea value={constraints} onChange={(event) => setConstraints(event.target.value)} />
+              </label>
+              <label>
+                Affected paths
+                <textarea value={affectedPaths} onChange={(event) => setAffectedPaths(event.target.value)} placeholder="src/App.tsx&#10;src-tauri/src/main.rs" />
+              </label>
+              <label>
+                Allowed paths
+                <textarea value={allowedPaths} onChange={(event) => setAllowedPaths(event.target.value)} placeholder="src&#10;README.md&#10;.dbc/tasks" />
+              </label>
+              <label>
+                Denied paths
+                <textarea value={deniedPaths} onChange={(event) => setDeniedPaths(event.target.value)} />
+              </label>
+              <label>
+                Stop conditions
+                <textarea value={stopConditions} onChange={(event) => setStopConditions(event.target.value)} />
+              </label>
+            </div>
+          </div>
+
+          <div className="composer-section">
+            <div className="composer-section-head">
+              <span>3</span>
+              <div>
+                <strong>Choose review and run mode</strong>
+                <p>Default to mock/safe execution until the readiness checks are clean.</p>
+              </div>
+            </div>
+            <div className="composer-grid meta-grid">
+              <label>
+                Required reviewers
+                <textarea value={requiredReviewers} onChange={(event) => setRequiredReviewers(event.target.value)} />
+              </label>
+              <label>
+                Budget
+                <input type="number" min="0" step="1" value={budgetLimit} onChange={(event) => setBudgetLimit(Number(event.target.value))} />
+              </label>
+              <label>
+                Risk
+                <select value={risk} onChange={(event) => setRisk(event.target.value as RiskLevel)}>
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                  <option value="critical">critical</option>
+                </select>
+              </label>
+              <label>
+                Priority
+                <select value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}>
+                  <option value="low">low</option>
+                  <option value="normal">normal</option>
+                  <option value="high">high</option>
+                  <option value="urgent">urgent</option>
+                </select>
+              </label>
+              <label>
+                Loop profile
+                <select value={loopProfile} onChange={(event) => setLoopProfile(event.target.value as TaskLoopProfile)}>
+                  <option value="mock">mock</option>
+                  <option value="controlled_smoke">controlled_smoke</option>
+                  <option value="real_micro">real_micro</option>
+                </select>
+              </label>
+              <label>
+                Provider strategy
+                <select value={providerStrategy} onChange={(event) => setProviderStrategy(event.target.value as ProviderStrategy)}>
+                  <option value="codex_build_claude_review">codex_build_claude_review</option>
+                  <option value="codex_only">codex_only</option>
+                  <option value="claude_review_only">claude_review_only</option>
+                  <option value="mock_only">mock_only</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div className="composer-footer">
+            <p>{canSaveTask ? "Recommended path: save the task and start a safe Harness run with mock/controlled gates." : "Add a title and TZ before starting the guided flow."}</p>
+            <div className="action-toolbar">
+              <button className="primary-btn" onClick={submitAndStart} disabled={!canSaveTask}>
+                <Play size={16} />
+                Save and start safe run
+              </button>
+              <button className="ghost-btn" onClick={submit} disabled={!canSaveTask}>
+                <Plus size={16} />
+                Save task
+              </button>
+              <button className="ghost-btn" onClick={() => startLoop()}>
+                <Play size={16} />
+                Start demo loop
+              </button>
+            </div>
           </div>
         </div>
       </Panel>
+      <div className="task-section-head">
+        <div>
+          <strong>Saved tasks</strong>
+          <p>Use Start safe run here after the task is saved.</p>
+        </div>
+        <span className="status-pill">{tasks.length} task{tasks.length === 1 ? "" : "s"}</span>
+      </div>
       <div className="task-list">
-        {tasks.map((task) => {
+        {tasks.length ? tasks.map((task) => {
           const latestContract = latestContractForTask(task.id, harnessOverview.contracts);
           const latestSlice = latestSliceForTask(task.id, harnessOverview.slices);
           const approvedContract = latestContractForTask(task.id, harnessOverview.contracts, ["approved"]);
@@ -3096,7 +3636,13 @@ function TasksView({
               </details>
             </article>
           );
-        })}
+        }) : (
+          <div className="empty-state">
+            <span className="status-pill warning">empty</span>
+            <strong>No saved tasks yet</strong>
+            <p>Fill the Task Composer above and press Save task to create the first runnable task.</p>
+          </div>
+        )}
       </div>
     </section>
   );
@@ -3123,9 +3669,22 @@ function PreflightView({
   const warnings = gates.filter((gate) => gate.level === "warning");
   const hasRealCli = steps.some((step) => step.providerType === "cli" && step.providerRunMode === "real");
   const canRun = blockers.length === 0 && Boolean(task);
+  const nextAction = !task
+    ? "Select a task from Tasks before running preflight."
+    : blockers.length
+      ? "Fix blockers before running the loop."
+      : warnings.length
+        ? "Review warnings, then run the loop if they are expected."
+        : "Ready to run the loop.";
 
   return (
     <section className="view-stack">
+      <OperatorHint
+        step="Step 1"
+        title="Check readiness before execution"
+        detail="Preflight turns the task into a yes/no launch decision. Fix blockers first; warnings are allowed only when you understand the risk."
+        status={blockers.length ? "blocked" : warnings.length ? "warnings" : "ready"}
+      />
       <Panel
         title="Loop Preflight"
         icon={ShieldCheck}
@@ -3140,11 +3699,19 @@ function PreflightView({
             </button>
             <button className="primary-btn" onClick={() => onRun(task)} disabled={!canRun}>
               <Play size={16} />
-              {hasRealCli ? "Run real loop" : "Run loop"}
+              {hasRealCli ? "Run real loop" : "Run safe loop"}
             </button>
           </div>
         }
       >
+        <DecisionStrip
+          items={[
+            { label: "Decision", value: blockers.length ? "Blocked" : warnings.length ? "Review warnings" : "Ready", tone: blockers.length ? "failed" : warnings.length ? "warning" : "ok" },
+            { label: "Blockers", value: String(blockers.length), tone: blockers.length ? "failed" : "ok" },
+            { label: "Warnings", value: String(warnings.length), tone: warnings.length ? "warning" : "ok" },
+            { label: "Next action", value: nextAction },
+          ]}
+        />
         <div className="summary-grid">
           <div>
             <span>Task</span>
@@ -3160,7 +3727,7 @@ function PreflightView({
           </div>
         </div>
         <div className="audit-list">
-          {gates.map((gate) => (
+          {[...gates].sort((left, right) => gatePriority(left.level) - gatePriority(right.level)).map((gate) => (
             <div className="audit-row" key={`${gate.subject}-${gate.detail}`}>
               <span className={`status-pill ${gate.level === "error" ? "failed" : gate.level === "warning" ? "warning" : "ok"}`}>
                 {gate.level}
@@ -3319,8 +3886,20 @@ function LoopsView({
   const executionStep = activeLoopStep ?? steps[activeStep] ?? steps[0];
   const attemptsUsed = activeLoopStep?.attemptCount ?? 0;
   const maxAttempts = activeLoopStep?.maxAttempts ?? 3;
+  const latestHarnessRun = harnessOverview.runs[0];
+  const loopDecision = latestHarnessRun
+    ? displayValue(latestHarnessRun.status)
+    : currentLoop
+      ? displayValue(currentLoop.status)
+      : "No active run";
   return (
     <section className="view-stack">
+      <OperatorHint
+        step="Step 2"
+        title="Run and monitor the work slice"
+        detail="This is the operator console for HarnessRun progress. Use Advance for the next safe stage, then create Evidence Pack when the run reaches evidence_ready."
+        status={latestHarnessRun?.status === "blocked" || currentLoop?.status === "failed" ? "blocked" : latestHarnessRun || currentLoop ? "running" : "waiting"}
+      />
       <Panel
         title="Harness Runs"
         icon={ListChecks}
@@ -3331,24 +3910,14 @@ function LoopsView({
           </button>
         }
       >
-        <div className="summary-grid doctor-summary">
-          <div>
-            <span>Contracts</span>
-            <strong>{harnessOverview.contracts.length}</strong>
-          </div>
-          <div>
-            <span>Slices</span>
-            <strong>{harnessOverview.slices.length}</strong>
-          </div>
-          <div>
-            <span>Runs</span>
-            <strong>{harnessOverview.runs.length}</strong>
-          </div>
-          <div>
-            <span>Packs</span>
-            <strong>{harnessOverview.evidencePacks.length}</strong>
-          </div>
-        </div>
+        <DecisionStrip
+          items={[
+            { label: "Run state", value: loopDecision, tone: latestHarnessRun?.status === "blocked" || currentLoop?.status === "failed" ? "failed" : latestHarnessRun?.status === "evidence_ready" ? "ok" : "warning" },
+            { label: "Contracts", value: String(harnessOverview.contracts.length) },
+            { label: "Slices", value: String(harnessOverview.slices.length) },
+            { label: "Evidence packs", value: String(harnessOverview.evidencePacks.length), tone: harnessOverview.evidencePacks.length ? "ok" : "warning" },
+          ]}
+        />
         <div className="audit-list">
           {harnessOverview.runs.length ? (
             harnessOverview.runs.slice(0, 8).map((run) => {
@@ -3379,7 +3948,11 @@ function LoopsView({
               );
             })
           ) : (
-            <p className="helper-text">Create an approved TaskContract and WorkSlice, then start a HarnessRun from Tasks.</p>
+            <div className="empty-state">
+              <span className="status-pill warning">waiting</span>
+              <strong>No HarnessRun yet</strong>
+              <p>Go to Tasks and press Start safe run. DBC will create the contract, slice, run record, and compatible loop for you.</p>
+            </div>
           )}
         </div>
       </Panel>
@@ -3406,7 +3979,11 @@ function LoopsView({
               </button>
             ))
           ) : (
-            <p className="helper-text">No saved loops found for the active project yet.</p>
+            <div className="empty-state">
+              <span className="status-pill warning">empty</span>
+              <strong>No saved loop history</strong>
+              <p>Run a safe task first, then refresh this panel to inspect saved manifests and reports.</p>
+            </div>
           )}
         </div>
       </Panel>
@@ -3485,7 +4062,11 @@ function LoopsView({
             ))}
           </div>
         ) : (
-          <p className="helper-text">Run pnpm run-journal or Launch Doctor, then refresh this panel.</p>
+          <div className="empty-state">
+            <span className="status-pill warning">preview</span>
+            <strong>Run Journal not loaded</strong>
+            <p>In desktop mode, run-journal links provider calls, approvals, security findings, and evidence. Run pnpm run-journal or Launch Doctor, then refresh.</p>
+          </div>
         )}
       </Panel>
 
@@ -3534,7 +4115,11 @@ function LoopsView({
             ))}
           </div>
         ) : (
-          <p className="helper-text">Run pnpm loop-state-machine or Launch Doctor, then refresh this panel.</p>
+          <div className="empty-state">
+            <span className="status-pill warning">preview</span>
+            <strong>State machine not loaded</strong>
+            <p>Run pnpm loop-state-machine or Launch Doctor to see the current lifecycle transition and blockers.</p>
+          </div>
         )}
       </Panel>
 
@@ -3844,6 +4429,61 @@ function EvidenceBlock({ title, children }: { title: string; children: ReactNode
   );
 }
 
+type DecisionTone = "ok" | "warning" | "failed";
+
+function OperatorHint({
+  step,
+  title,
+  detail,
+  status,
+}: {
+  step: string;
+  title: string;
+  detail: string;
+  status: string;
+}) {
+  return (
+    <section className="operator-hint">
+      <div>
+        <span>{step}</span>
+        <strong>{title}</strong>
+        <p>{detail}</p>
+      </div>
+      <span className={`status-pill ${statusClass(status)}`}>{displayValue(status)}</span>
+    </section>
+  );
+}
+
+function DecisionStrip({
+  items,
+}: {
+  items: Array<{ label: string; value: string; tone?: DecisionTone }>;
+}) {
+  return (
+    <div className="decision-strip">
+      {items.map((item) => (
+        <div className={`decision-item ${item.tone ?? ""}`} key={`${item.label}-${item.value}`}>
+          <span>{item.label}</span>
+          <strong>{item.value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+type HarnessGate = ReturnType<typeof buildHarnessApprovalGates>[number];
+
+function GatePhase({ gate }: { gate: HarnessGate }) {
+  const tone = gate.status === "approved" || gate.status === "ready" ? "ok" : gate.status === "blocked" ? "failed" : "warning";
+  return (
+    <article className={`gate-phase ${tone}`}>
+      <span className={`status-pill ${tone}`}>{displayValue(gate.status)}</span>
+      <strong>{gate.label}</strong>
+      <p>{gate.detail}</p>
+    </article>
+  );
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -3869,9 +4509,15 @@ function arrayText(value: unknown) {
 }
 
 function statusClass(status: string) {
-  if (["ok", "pass", "passed", "completed", "accepted"].includes(status)) return "ok";
+  if (["ok", "pass", "passed", "completed", "accepted", "ready", "clear"].includes(status)) return "ok";
   if (["failed", "fail", "error", "blocked", "rejected"].includes(status)) return "failed";
   return "warning";
+}
+
+function gatePriority(level: "ok" | "warning" | "error") {
+  if (level === "error") return 0;
+  if (level === "warning") return 1;
+  return 2;
 }
 
 function ApprovalsView({
@@ -3888,8 +4534,22 @@ function ApprovalsView({
   onRefreshApprovalQueue: () => void;
 }) {
   const harnessGates = buildHarnessApprovalGates(harnessOverview);
+  const pendingApprovals = approvals.filter((approval) => approval.status === "pending").length;
+  const approvalDecision = approvalQueue?.blockers.length
+    ? "Blocked"
+    : pendingApprovals
+      ? `${pendingApprovals} pending`
+      : approvalQueue
+        ? displayValue(approvalQueue.status)
+        : "Preview mode";
   return (
     <section className="view-stack">
+      <OperatorHint
+        step="Step 3"
+        title="Approve only the gates you understand"
+        detail="Approvals are the human brake in DBC. Real provider execution and risky commands should remain blocked until an operator approves them."
+        status={approvalQueue?.blockers.length ? "blocked" : pendingApprovals ? "waiting" : "ready"}
+      />
       <Panel
         title="Approval Queue"
         icon={ShieldCheck}
@@ -3900,6 +4560,14 @@ function ApprovalsView({
           </button>
         }
       >
+        <DecisionStrip
+          items={[
+            { label: "Decision", value: approvalDecision, tone: approvalQueue?.blockers.length ? "failed" : pendingApprovals ? "warning" : "ok" },
+            { label: "Local pending", value: String(pendingApprovals), tone: pendingApprovals ? "warning" : "ok" },
+            { label: "Real provider", value: "Human approval required", tone: "warning" },
+            { label: "Queue", value: approvalQueue ? displayValue(approvalQueue.status) : "Preview mode" },
+          ]}
+        />
         {approvalQueue ? (
           <div className="audit-list">
             <div className="summary-grid doctor-summary">
@@ -3971,30 +4639,24 @@ function ApprovalsView({
             ))}
           </div>
         ) : (
-          <div className="audit-row">
+          <div className="audit-row empty-state">
             <span className="status-pill warning">missing</span>
             <strong>Approval Queue report</strong>
-            <p>Run pnpm approval-queue in the project root, then refresh this panel.</p>
+            <p>Preview mode has no desktop approval report yet. Run pnpm approval-queue in the project root or start a safe run in the desktop app, then refresh this panel.</p>
           </div>
         )}
       </Panel>
 
       <Panel title="Harness Approval Gates" icon={ShieldCheck}>
-        <div className="audit-list">
+        <div className="gate-phase-grid">
           {harnessGates.map((gate) => (
-            <div className="audit-row" key={gate.id}>
-              <span className={`status-pill ${gate.status === "approved" || gate.status === "ready" ? "ok" : gate.status === "blocked" ? "failed" : "warning"}`}>
-                {displayValue(gate.status)}
-              </span>
-              <strong>{gate.label}</strong>
-              <p>{gate.detail}</p>
-            </div>
+            <GatePhase key={gate.id} gate={gate} />
           ))}
         </div>
       </Panel>
 
       <section className="approval-list">
-        {approvals.map((approval) => (
+        {approvals.length ? approvals.map((approval) => (
           <article className="approval-card" key={approval.id}>
             <div className="approval-head">
             <div>
@@ -4033,7 +4695,13 @@ function ApprovalsView({
           </div>
           <span className={`status-pill ${approval.status}`}>{approval.status.replace("_", " ")}</span>
           </article>
-        ))}
+        )) : (
+          <div className="empty-state">
+            <span className="status-pill ok">clear</span>
+            <strong>No local pending approvals</strong>
+            <p>Start a safe run or switch to real provider flow to generate approval requests.</p>
+          </div>
+        )}
       </section>
     </section>
   );
@@ -4044,23 +4712,45 @@ function ReportsView({
   totalCost,
   currentLoop,
   harnessOverview,
+  onDecideHarnessResult,
 }: {
   state: AppState;
   totalCost: number;
   currentLoop: LoopRunSnapshot | null;
   harnessOverview: HarnessOverview;
+  onDecideHarnessResult: (runId: string, decision: "accepted" | "rework" | "rejected", note: string) => Promise<void> | void;
 }) {
+  const [decisionNote, setDecisionNote] = useState("");
+  const [localDecision, setLocalDecision] = useState<"" | "accepted" | "rework" | "rejected">("");
+  const task = state.tasks[0];
+  const allStepsPassed = state.loopSteps.length > 0 && state.loopSteps.every((step) => step.status === "passed");
+  const pendingApprovals = state.approvals.filter((approval) => approval.status === "pending");
+  const hasArtifacts = state.loopSteps.some((step) => Boolean(step.artifactPath));
+  const hasEvidenceFiles = state.loopSteps.some((step) => Boolean(step.evidencePath));
+  const hasStructuredReports = state.loopSteps.some((step) => Boolean(step.structuredReport));
+  const hasTaskSpec = Boolean(task?.specPath && task.specChecksum);
+  const hasMemoryFiles = state.memory.some((note) => Boolean(note.path && note.checksum));
+  const latestPack = harnessOverview.evidencePacks[0];
+  const latestRun = harnessOverview.runs[0];
+  const finalStatus = allStepsPassed && pendingApprovals.length === 0 ? "accepted" : "blocked";
+  const missingEvidenceCount = [
+    !allStepsPassed,
+    !hasArtifacts,
+    !hasEvidenceFiles,
+    !hasStructuredReports,
+    !hasTaskSpec,
+    pendingApprovals.length > 0,
+  ].filter(Boolean).length;
+  const acceptanceChecks = [
+    { label: "Loop steps passed", ok: allStepsPassed, detail: allStepsPassed ? "All loop steps are green." : "Run or advance the Harness lifecycle until all required steps pass." },
+    { label: "Backend artifacts recorded", ok: hasArtifacts, detail: hasArtifacts ? "Step artifacts are linked." : "No backend artifact paths are present on loop steps." },
+    { label: "Evidence files recorded", ok: hasEvidenceFiles, detail: hasEvidenceFiles ? "Machine-readable evidence exists." : "Step evidence files are missing." },
+    { label: "Review/security reports", ok: hasStructuredReports, detail: hasStructuredReports ? "Structured reports are attached." : "Reviewer/security structured output is missing." },
+    { label: "Task spec persisted", ok: hasTaskSpec, detail: hasTaskSpec ? "Task spec has a path and checksum." : "Save the task spec or create a TaskContract artifact." },
+    { label: "No pending approvals", ok: pendingApprovals.length === 0, detail: pendingApprovals.length === 0 ? "No human gate is waiting." : `${pendingApprovals.length} approval request(s) must be resolved.` },
+    { label: "Harness EvidencePack", ok: Boolean(latestPack), detail: latestPack ? latestPack.manifestPath : "Generate EvidencePack from an evidence-ready HarnessRun." },
+  ];
   const report = useMemo(() => {
-    const task = state.tasks[0];
-    const allStepsPassed = state.loopSteps.length > 0 && state.loopSteps.every((step) => step.status === "passed");
-    const pendingApprovals = state.approvals.filter((approval) => approval.status === "pending");
-    const hasArtifacts = state.loopSteps.some((step) => Boolean(step.artifactPath));
-    const hasEvidenceFiles = state.loopSteps.some((step) => Boolean(step.evidencePath));
-    const hasStructuredReports = state.loopSteps.some((step) => Boolean(step.structuredReport));
-    const hasTaskSpec = Boolean(task?.specPath && task.specChecksum);
-    const hasMemoryFiles = state.memory.some((note) => Boolean(note.path && note.checksum));
-    const latestPack = harnessOverview.evidencePacks[0];
-    const finalStatus = allStepsPassed && pendingApprovals.length === 0 ? "accepted" : "blocked";
     return [
       `# Acceptance Report: ${task?.title ?? "Untitled task"}`,
       "",
@@ -4129,10 +4819,77 @@ function ReportsView({
         ? pendingApprovals.map((approval) => `- Pending approval: ${approval.action}`)
         : ["- No unresolved approval risks recorded."]),
     ].join("\n");
-  }, [state, totalCost, currentLoop, harnessOverview]);
+  }, [allStepsPassed, currentLoop, finalStatus, harnessOverview.evidencePacks, hasArtifacts, hasEvidenceFiles, hasMemoryFiles, hasStructuredReports, hasTaskSpec, pendingApprovals, state.loopSteps, state.memory, task, totalCost]);
+
+  async function decide(decision: "accepted" | "rework" | "rejected") {
+    setLocalDecision(decision);
+    if (latestRun) {
+      await onDecideHarnessResult(latestRun.id, decision, decisionNote.trim());
+    }
+  }
 
   return (
     <section className="view-stack">
+      <OperatorHint
+        step="Step 4"
+        title="Decide from evidence, not vibes"
+        detail="Reports should answer whether the work can be accepted, needs rework, or must be rejected. Missing evidence keeps the result blocked."
+        status={finalStatus === "accepted" ? "accepted" : "blocked"}
+      />
+      <Panel title="Acceptance Decision" icon={BadgeCheck}>
+        <DecisionStrip
+          items={[
+            { label: "Final status", value: finalStatus, tone: finalStatus === "accepted" ? "ok" : "failed" },
+            { label: "Evidence Pack", value: latestPack ? displayValue(latestPack.status) : "not generated", tone: latestPack ? "ok" : "warning" },
+            { label: "Missing gates", value: String(missingEvidenceCount), tone: missingEvidenceCount ? "warning" : "ok" },
+            { label: "Pending approvals", value: String(pendingApprovals.length), tone: pendingApprovals.length ? "warning" : "ok" },
+          ]}
+        />
+        <div className="decision-box">
+          <label>
+            Decision note
+            <textarea
+              value={decisionNote}
+              onChange={(event) => setDecisionNote(event.target.value)}
+              placeholder="Why is this accepted, sent to rework, or rejected?"
+            />
+          </label>
+          <div className="decision-actions">
+            <button className="primary-btn" onClick={() => decide("accepted")} disabled={!latestRun || finalStatus !== "accepted" || !latestPack}>
+              <CheckCircle2 size={16} />
+              Accept
+            </button>
+            <button className="warning-btn" onClick={() => decide("rework")} disabled={!latestRun}>
+              <RotateCcw size={16} />
+              Request rework
+            </button>
+            <button className="danger-btn" onClick={() => decide("rejected")} disabled={!latestRun}>
+              <XCircle size={16} />
+              Reject
+            </button>
+          </div>
+          <p className="helper-text">
+            {latestRun
+              ? localDecision
+                ? `Latest local decision: ${displayValue(localDecision)}. Desktop mode also writes it through Harness Engine.`
+                : "Accept is enabled only when evidence is complete and no approval is pending."
+              : "Start a Harness run before making the final decision."}
+          </p>
+        </div>
+      </Panel>
+      <Panel title="Acceptance Checklist" icon={ListChecks}>
+        <div className="acceptance-checklist">
+          {acceptanceChecks.map((check) => (
+            <article className={check.ok ? "acceptance-check ok" : "acceptance-check blocked"} key={check.label}>
+              {check.ok ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+              <div>
+                <strong>{check.label}</strong>
+                <p>{check.detail}</p>
+              </div>
+            </article>
+          ))}
+        </div>
+      </Panel>
       <Panel title="Evidence Packs" icon={ClipboardCheck}>
         <div className="audit-list">
           {harnessOverview.evidencePacks.length ? (
@@ -4148,7 +4905,11 @@ function ReportsView({
               </div>
             ))
           ) : (
-            <p className="helper-text">Generate EvidencePack from a HarnessRun after it reaches evidence_ready.</p>
+            <div className="empty-state">
+              <span className="status-pill warning">not ready</span>
+              <strong>No Evidence Pack yet</strong>
+              <p>Start from Tasks, run a safe Harness flow, advance it to evidence_ready, then generate an Evidence Pack here.</p>
+            </div>
           )}
         </div>
       </Panel>
@@ -4474,31 +5235,78 @@ function SettingsView({
   }
 
   const routingDiagnostics = buildProviderRoutingDiagnostics(state.agents, state.providers);
+  const codexProvider = state.providers.find((provider) => provider.name.toLowerCase().includes("codex"));
+  const claudeProvider = state.providers.find((provider) => provider.name.toLowerCase().includes("claude"));
+  const localRunner = state.providers.find((provider) => provider.type === "local_runner");
+  const realProviders = state.providers.filter((provider) => provider.type === "cli" && provider.runMode === "real");
+  const readyProviders = state.providers.filter((provider) => provider.enabled && provider.health === "ok");
 
   return (
     <section className="view-stack">
+      <Panel
+        title="Quick Setup"
+        icon={Gauge}
+        action={
+          <div className="action-toolbar">
+            <button className="primary-btn compact-btn" onClick={syncProjectConfig} disabled={!activeProject}>
+              <ClipboardCheck size={16} />
+              Save setup
+            </button>
+            <button className="ghost-btn compact-btn" onClick={() => switchProviderProfile("mock")} disabled={!activeProject}>
+              <RotateCcw size={16} />
+              Safe mock
+            </button>
+          </div>
+        }
+      >
+        <OperatorHint
+          step="Settings baseline"
+          title={readyProviders.length ? "Providers are ready enough for guided runs" : "Check CLI paths before real execution"}
+          detail="Use mock mode for product loops, then switch only the approved micro-task to real provider mode after CLI discovery and contract checks pass."
+          status={readyProviders.length ? "ready" : "waiting"}
+        />
+        <DecisionStrip
+          items={[
+            { label: "Codex", value: codexProvider ? displayValue(codexProvider.health) : "missing", tone: codexProvider?.health === "ok" ? "ok" : "warning" },
+            { label: "Claude", value: claudeProvider ? displayValue(claudeProvider.health) : "missing", tone: claudeProvider?.health === "ok" ? "ok" : "warning" },
+            { label: "Local runner", value: localRunner ? displayValue(localRunner.health) : "missing", tone: localRunner ? "ok" : "warning" },
+            { label: "Real providers", value: String(realProviders.length), tone: realProviders.length ? "warning" : "ok" },
+          ]}
+        />
+        <div className="quick-setup-grid">
+          <div>
+            <strong>Recommended user path</strong>
+            <p>Start with Safe mock, save setup, create a task, then use Save and start safe run.</p>
+          </div>
+          <div>
+            <strong>Real provider rule</strong>
+            <p>Real Codex/Claude execution stays behind approval gates and should be used only for tiny controlled slices.</p>
+          </div>
+        </div>
+      </Panel>
+
       <Panel title="Project Contract" icon={ClipboardCheck}>
-        <div className="provider-form">
-          <label>
+        <div className="form-action-row">
+          <label className="field-fill">
             Active project
             <input readOnly value={activeProject?.path ?? "No active project"} />
           </label>
-          <div className="button-row">
-            <button className="primary-btn" onClick={syncProjectConfig} disabled={!activeProject}>
+          <div className="action-toolbar" aria-label="Project contract actions">
+            <button className="primary-btn compact-btn" onClick={syncProjectConfig} disabled={!activeProject}>
               <ClipboardCheck size={16} />
-              Sync .dbc config
+              Sync config
             </button>
-            <button className="ghost-btn" onClick={loadProjectContract} disabled={!activeProject}>
+            <button className="ghost-btn compact-btn" onClick={loadProjectContract} disabled={!activeProject}>
               <FileText size={16} />
-              Load .dbc config
+              Load config
             </button>
-            <button className="ghost-btn" onClick={() => switchProviderProfile("real-micro")} disabled={!activeProject}>
+            <button className="warning-btn compact-btn" onClick={() => switchProviderProfile("real-micro")} disabled={!activeProject}>
               <Play size={16} />
-              Apply real micro
+              Real micro
             </button>
-            <button className="ghost-btn" onClick={() => switchProviderProfile("mock")} disabled={!activeProject}>
+            <button className="ghost-btn compact-btn" onClick={() => switchProviderProfile("mock")} disabled={!activeProject}>
               <RotateCcw size={16} />
-              Apply mock
+              Mock mode
             </button>
           </div>
         </div>

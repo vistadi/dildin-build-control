@@ -6,7 +6,7 @@ I am publishing Dildin Build Control, a local-first desktop control tower for AI
 
 The core idea: agent work should be treated as an engineering loop, not a disappearing chat transcript.
 
-DBC gives each run a task contract, provider routing, preflight checks, build/test evidence, review, security gates, acceptance reports, and a manual git handoff. It supports mock loops for rehearsal and real CLI provider loops when the operator is ready.
+DBC gives each run a Guided Run path: TZ intake, TaskContract, WorkSlice, HarnessRun, provider routing, build/test evidence, review, security gates, EvidencePack, final Accept/Rework/Reject decision, and a manual git handoff. It supports mock loops for rehearsal and real CLI provider loops when the operator is ready.
 
 The project is built with Tauri, React, TypeScript, Rust, SQLite, and portable `.dbc` workspace files.
 
@@ -22,7 +22,7 @@ Repository: <GitHub URL>
 
 I am open-sourcing Dildin Build Control: a local-first desktop control tower for AI coding loops.
 
-Task contract -> preflight -> provider routing -> build/test evidence -> review -> security -> acceptance -> manual git handoff.
+TZ -> TaskContract -> WorkSlice -> HarnessRun -> EvidencePack -> Accept/Rework/Reject -> manual git handoff.
 
 Not one-click autonomy. Loop engineering.
 
@@ -30,6 +30,6 @@ Repo: <GitHub URL>
 
 ## Short Version
 
-Dildin Build Control is a Tauri desktop app for running AI coding agents with explicit task contracts, provider routing, approval gates, evidence, security checks, and manual git handoff.
+Dildin Build Control is a Tauri desktop app for running AI coding agents with Guided Run, explicit task contracts, bounded work slices, provider routing, approval gates, EvidencePacks, security checks, final decisions, and manual git handoff.
 
 Apache-2.0. Feedback welcome: <GitHub URL>

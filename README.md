@@ -1,12 +1,13 @@
 # Dildin Build Control
 
-DBC is a local-first desktop control tower for AI-assisted software delivery. It turns agent work into an auditable loop: task contract, provider routing, preflight gates, implementation, build/test evidence, review, security checks, acceptance package, and manual git handoff.
+DBC is a local-first desktop control tower for AI-assisted software delivery. It turns agent work into an auditable production loop: TZ intake, task contract, bounded work slice, harness run, provider routing, preflight gates, build/test evidence, review, security checks, EvidencePack, final decision, and manual git handoff.
 
 The project is built for operators who want the speed of CLI coding agents without losing control of scope, approvals, command policy, evidence, or rollback.
 
 ## Why DBC
 
 - **Loop engineering over chat transcripts.** Every run has a state machine, task contract, artifacts, evidence, gates, and an acceptance decision.
+- **Guided Run as the normal path.** Operators can move from pasted TZ to safe run, EvidencePack, and Accept/Rework/Reject without learning every internal console first.
 - **Human approval stays explicit.** DBC does not branch, stage, commit, push, deploy, reset, or run destructive commands automatically.
 - **Provider-agnostic local execution.** Mock, Codex CLI, Claude Code CLI, generic CLI, and local terminal runners can be routed by role.
 - **Portable project memory.** `.dbc` contracts describe providers, command policy, tasks, memory, approvals, loop manifests, evidence, and reports.
@@ -14,11 +15,13 @@ The project is built for operators who want the speed of CLI coding agents witho
 
 ## Demo
 
-![Control Tower](docs/screenshots/01-control-tower.png)
+![Control Tower](docs/screenshots-guide/01-control-tower.png)
 
-![Preflight Gates](docs/screenshots/03-preflight-gates.png)
+![Guided Run](docs/screenshots-guide/02-guided-run.png)
 
-![Evidence Reports](docs/screenshots/06-reports-evidence.png)
+![Reports Checklist](docs/screenshots-guide/03-reports-checklist.png)
+
+![Settings Quick Setup](docs/screenshots-guide/04-settings-quick-setup.png)
 
 More demo shots are indexed in [docs/demo/README.md](docs/demo/README.md).
 
@@ -31,17 +34,24 @@ More demo shots are indexed in [docs/demo/README.md](docs/demo/README.md).
 - [Example .dbc Workspace](examples/dbc-workspace/.dbc/README.md)
 - [Demo Project](examples/demo-project/README.md)
 - [Launch Post Drafts](docs/LAUNCH_POSTS.md)
+- [Design And Usability Audit](docs/design-audit/audit.md)
 
 ## Operator Guide
 
 If you need the practical setup and usage flow in Russian, start here:
 
 - [DBC User Guide RU](docs/DBC_USER_GUIDE_RU.md)
+- [DBC Production User Guide RU](docs/DBC_Production_User_Guide_RU.docx)
+- [DBC Testing And Methodology Guide RU](docs/DBC_Testing_And_Methodology_Guide_RU.docx)
 
 ## Current MVP
 
 - Tauri project structure with React, TypeScript, Rust command contracts, and SQLite bootstrap.
-- Control Tower, Projects, Workspace, Task Composer, AI Team, Loop Monitor, Approvals, Reports, and Settings screens.
+- Control Tower, Projects, Workspace, Guided Run, Task Composer, AI Team, Loop Monitor, Approvals, Reports, and Settings screens.
+- Guided Run is now the primary operator flow: paste TZ, create a task, freeze/approve a TaskContract, create a WorkSlice, start a safe HarnessRun, advance stages, generate EvidencePack, then Accept/Rework/Reject.
+- Control Tower shows the current workflow next action, HarnessRun status, approval count, EvidencePack readiness, and the production loop step sequence.
+- Reports include an Acceptance Decision panel, Acceptance Checklist, EvidencePack list, generated Markdown acceptance report, and final Harness decision actions.
+- Settings include a Quick Setup panel for provider readiness, safe mock baseline, project setup save, and real-provider caution.
 - Loop Preflight screen checks task/spec/runtime/provider/security/git/build gates before starting execution.
 - Loop History can reopen previous runs from SQLite or recover snapshots from `.dbc/loops/<loop-id>.json`.
 - Project recovery auto-loads `.dbc/providers.yaml`, `.dbc/policy.yaml`, `.dbc/tasks`, `.dbc/memory`, and `.dbc/loops` when an active project is opened.
@@ -72,6 +82,7 @@ If you need the practical setup and usage flow in Russian, start here:
 - Approval decisions are now resolved through the backend loop state: approve restarts the active step, reject blocks it, and request changes fails it for rework.
 - Approval ledger writes portable `.dbc/approvals/latest.json` and `.dbc/approvals/decisions/<id>.json` records for real-loop gates, provider switches, task starts, scope expansion, command templates, and git actions.
 - Approval queue, audit trail, cost events, project memory, and evidence-backed report preview.
+- Design audit evidence and updated screenshot guide live under `docs/design-audit/` and `docs/screenshots-guide/`.
 
 ## Run
 
@@ -82,12 +93,33 @@ pnpm dev
 
 The verified web shell runs through Vite. Native Tauri builds require Rust/Cargo to be installed.
 
+## Guided Run
+
+Use `Guided Run` for the normal production path:
+
+1. Paste the TZ/request and define acceptance criteria, allowed paths, and out-of-scope paths.
+2. Click `Create and start safe run`.
+3. DBC creates the task, freezes and approves the safe TaskContract path, creates a WorkSlice, and starts a HarnessRun in safe mode.
+4. Advance the HarnessRun until it reaches evidence readiness.
+5. Generate an EvidencePack.
+6. Open Reports and decide `Accept`, `Request rework`, or `Reject` from evidence.
+
+Expert screens remain available for diagnostics, but Guided Run is the intended operator entry point.
+
+Guided Run smoke check:
+
+```bash
+pnpm guided-run-smoke
+```
+
+The check validates the Guided Run navigation, acceptance checklist, quick setup surface, production bundle strings, required screenshots, and production guide artifact.
+
 ## GitHub Publishing Notes
 
 - Commit source, docs, lockfiles, Tauri icons, and example configs.
 - Do not commit `.dbc/`, `node_modules/`, `dist/`, `src-tauri/target/`, `.env*`, local logs, release packages, or provider credentials.
 - Use `docs/cli-profiles.example.yaml` as the portable provider configuration example.
-- Run `pnpm build` and `cargo test --manifest-path src-tauri/Cargo.toml` before opening a release PR or tag.
+- Run `pnpm build`, `pnpm guided-run-smoke`, and `cargo test --manifest-path src-tauri/Cargo.toml` before opening a release PR or tag.
 - Licensed under Apache-2.0. See [LICENSE](LICENSE).
 
 ## Configure CLI Providers
@@ -222,6 +254,15 @@ Use this after any controlled smoke, mock, or real micro loop:
 - DBC writes `.dbc/evidence-summary/latest.json` and `.dbc/evidence-summary/latest.md`.
 - Treat `missingArtifacts > 0` as incomplete evidence, even if the visual loop monitor shows a completed state.
 
+## Acceptance Decision
+
+Use `Reports` after a HarnessRun has evidence:
+
+- The Acceptance Checklist blocks acceptance until loop steps, artifacts, evidence files, structured review/security output, task spec, approval state, and EvidencePack are complete.
+- `Accept` is enabled only when the result is evidence-complete and no approval is pending.
+- `Request rework` and `Reject` remain available for incomplete or failed results.
+- Final Harness decisions are written through the desktop runtime and shown in EvidencePack records.
+
 ## System Audit
 
 Use this to summarize the whole launch state before approval:
@@ -321,6 +362,17 @@ Use this to summarize the whole launch state before approval:
 - `retry_loop_step`
 - `resolve_loop_approval`
 - `get_loop_run`
+- `create_task_contract`
+- `freeze_task_contract`
+- `approve_task_contract`
+- `reject_task_contract`
+- `create_work_slice`
+- `approve_work_slice`
+- `start_harness_run`
+- `advance_harness_run`
+- `generate_evidence_pack`
+- `accept_or_rework_harness_result`
+- `load_harness_overview`
 - `create_workspace`
 - `list_workspaces`
 

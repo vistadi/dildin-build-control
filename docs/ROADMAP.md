@@ -4,18 +4,19 @@ This roadmap is intentionally operator-centered. DBC should become more capable 
 
 ## Now
 
-- Stabilize the public repository structure, documentation, license, examples, and contribution path.
+- Keep the Guided Run production path stable: TZ intake, TaskContract, WorkSlice, HarnessRun, EvidencePack, and final decision.
 - Keep CI green for frontend build and Rust tests.
-- Improve onboarding around provider profiles, mock loops, and `.dbc` recovery.
-- Publish demo screenshots and short walkthrough materials.
+- Keep screenshot-guide, production guide, testing guide, and design audit evidence current.
+- Improve onboarding around Quick Setup, provider profiles, mock loops, and `.dbc` recovery.
 
 ## Next
 
 - Add smaller focused tests around command policy, scope gates, provider routing, and acceptance packages.
 - Add import/export validation for `.dbc` workspaces.
-- Add a compact demo video or GIF flow: task contract -> preflight -> evidence report.
+- Add a compact demo video or GIF flow: Guided Run -> HarnessRun advance -> EvidencePack -> Acceptance Checklist.
 - Improve release packaging docs for macOS signing/notarization.
 - Add a provider adapter test harness with fixture prompts and expected structured reports.
+- Add regression checks for Guided Run empty states, final decision states, and Quick Setup provider readiness.
 
 ## Later
 
@@ -36,8 +37,9 @@ This roadmap is intentionally operator-centered. DBC should become more capable 
 ## Release Readiness Checklist
 
 - `pnpm build` passes.
+- `pnpm guided-run-smoke` passes.
 - `cargo test --manifest-path src-tauri/Cargo.toml` passes.
 - No `.dbc`, `.env`, `dist`, `node_modules`, or build target files are staged.
-- README screenshots render on GitHub.
+- README screenshots and `docs/screenshots-guide/` render on GitHub.
 - Apache-2.0 license is detected.
 - Example `.dbc` workspace contains only safe mock/local configuration.
