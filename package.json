@@ -5,6 +5,7 @@
   "description": "Dildin Build Control desktop MVP shell",
   "license": "Apache-2.0",
   "type": "module",
+  "packageManager": "pnpm@11.7.0",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
