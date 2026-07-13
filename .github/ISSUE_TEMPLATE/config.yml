@@ -1,1 +1,8 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/vistadi/dildin-build-control/security/advisories/new
+    about: Report vulnerabilities privately. Do not disclose sensitive details in a public issue.
+  - name: Documentation
+    url: https://github.com/vistadi/dildin-build-control/tree/main/docs
+    about: Read the architecture, roadmap, user guide, and operating documentation.

@@ -1,0 +1,57 @@
+name: Bug report
+description: Report a reproducible DBC problem.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting a problem. Remove secrets, credentials, and private project content from all logs and screenshots.
+  - type: input
+    id: version
+    attributes:
+      label: DBC version
+      placeholder: v0.1.0-alpha.1 or commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Runtime
+      options:
+        - Desktop app (Tauri)
+        - Frontend shell (Vite)
+        - CLI script
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the observed and expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Add safe log excerpts, screenshots, or generated report paths. Never include secrets or private source code.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, tokens, private paths, and sensitive project content.
+          required: true
+        - label: I searched existing issues for the same problem.
+          required: true

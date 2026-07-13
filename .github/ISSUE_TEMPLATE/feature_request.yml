@@ -1,0 +1,34 @@
+name: Feature request
+description: Propose an operator-focused improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Operator problem
+      description: What workflow, decision, or safety problem should DBC solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful behavior, not only the UI treatment.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Acceptance evidence
+      description: What artifacts, tests, or visible states would prove this works?
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Safety boundaries
+      description: Explain effects on approvals, command policy, provider access, git, secrets, and rollback.
+    validations:
+      required: true

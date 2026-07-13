@@ -21,7 +21,7 @@ body:
     attributes:
       label: Suggested scope
       description: Which files or docs are likely involved?
-      placeholder: Example: docs/GOOD_FIRST_ISSUES.md only.
+      placeholder: "Example: docs/GOOD_FIRST_ISSUES.md only."
     validations:
       required: true
   - type: textarea
