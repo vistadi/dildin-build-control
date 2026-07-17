@@ -66,8 +66,10 @@ jobs:
       matrix:
         include:
           - arch: arm64
+            asset_arch: aarch64
             target: aarch64-apple-darwin
           - arch: x64
+            asset_arch: x64
             target: x86_64-apple-darwin
     steps:
       - name: Checkout
@@ -120,5 +122,7 @@ jobs:
           test -n "$dmg_path"
           app_version="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version")"
           checksum_file="Dildin_Build_Control_${app_version}_${{ matrix.arch }}.sha256"
-          shasum -a 256 "$dmg_path" | sed "s|$dmg_path|$(basename "$dmg_path")|" > "$checksum_file"
+          published_dmg="Dildin.Build.Control_${app_version}_darwin_${{ matrix.asset_arch }}.dmg"
+          digest="$(shasum -a 256 "$dmg_path" | awk '{print $1}')"
+          printf '%s  %s\n' "$digest" "$published_dmg" > "$checksum_file"
           gh release upload "${GITHUB_REF_NAME}" "$checksum_file" --clobber

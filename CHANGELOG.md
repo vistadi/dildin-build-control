@@ -12,6 +12,12 @@ The project follows [Semantic Versioning](https://semver.org/) while release sta
 - Focused regression tests for scope, provider, and acceptance gates.
 - Import and export validation for portable `.dbc` workspaces.
 
+## [0.1.1-alpha.2] - 2026-07-17
+
+### Fixed
+
+- SHA-256 manifests now reference the filenames published by GitHub Releases, so `shasum -c` verifies downloaded DMG assets directly.
+
 ## [0.1.1-alpha.1] - 2026-07-17
 
 ### Added
@@ -48,6 +54,7 @@ The project follows [Semantic Versioning](https://semver.org/) while release sta
 - Git branch, stage, commit, push, deploy, reset, clean, and destructive checkout remain manual.
 - Secret-like real-provider prompts are blocked and persisted output is redacted.
 
-[Unreleased]: https://github.com/vistadi/dildin-build-control/compare/v0.1.1-alpha.1...HEAD
+[Unreleased]: https://github.com/vistadi/dildin-build-control/compare/v0.1.1-alpha.2...HEAD
+[0.1.1-alpha.2]: https://github.com/vistadi/dildin-build-control/releases/tag/v0.1.1-alpha.2
 [0.1.1-alpha.1]: https://github.com/vistadi/dildin-build-control/releases/tag/v0.1.1-alpha.1
 [0.1.0-alpha.1]: https://github.com/vistadi/dildin-build-control/releases/tag/v0.1.0-alpha.1
