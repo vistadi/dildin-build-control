@@ -88,7 +88,7 @@ For frontend-only exploration, use `pnpm dev`. To build a native package locally
 
 ## Download
 
-Pre-release macOS packages are published under [GitHub Releases](https://github.com/vistadi/dildin-build-control/releases). Builds are currently unsigned; review the release notes and checksums before running them.
+Pre-release macOS packages are published under [GitHub Releases](https://github.com/vistadi/dildin-build-control/releases). Builds are currently unsigned; review the release notes and checksums before running them. See the [macOS installation and checksum guide](docs/INSTALL.md) before opening a downloaded build.
 
 ## What Is Included
 
@@ -106,6 +106,7 @@ Pre-release macOS packages are published under [GitHub Releases](https://github.
 - [Architecture](docs/ARCHITECTURE.md)
 - [Loop Engineering Manifesto](docs/LOOP_ENGINEERING_MANIFESTO.md)
 - [Roadmap](docs/ROADMAP.md)
+- [macOS installation guide](docs/INSTALL.md)
 - [Russian User Guide](docs/DBC_USER_GUIDE_RU.md)
 - [Example `.dbc` workspace](examples/dbc-workspace/.dbc/README.md)
 - [Demo project](examples/demo-project/README.md)

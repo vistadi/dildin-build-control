@@ -1,8 +1,8 @@
 {
   "name": "dildin-build-control",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
-  "description": "Dildin Build Control desktop MVP shell",
+  "description": "Local-first desktop control tower for auditable AI coding loops",
   "license": "Apache-2.0",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
@@ -11,6 +11,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "guided-run-smoke": "node scripts/guided-run-smoke.mjs",
+    "release-check": "node scripts/release-check.mjs",
     "controlled-smoke": "node scripts/controlled-smoke.mjs",
     "real-readiness": "node scripts/real-readiness.mjs",
     "real-micro-plan": "node scripts/real-micro-plan.mjs",

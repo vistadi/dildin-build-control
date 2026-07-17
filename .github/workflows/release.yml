@@ -9,9 +9,58 @@ permissions:
   contents: write
 
 jobs:
+  quality:
+    name: Release quality gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify release metadata
+        run: pnpm release-check -- "${GITHUB_REF_NAME}"
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Run Guided Run smoke check
+        run: pnpm guided-run-smoke
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
   macos:
     name: macOS (${{ matrix.arch }})
     runs-on: macos-14
+    needs: quality
     strategy:
       fail-fast: false
       matrix:
@@ -53,7 +102,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "Dildin Build Control ${{ github.ref_name }}"
           releaseBody: |
-            First public alpha of Dildin Build Control.
+            Automated prerelease build of Dildin Build Control. Review the changelog and installation guide before running it.
 
             This build is unsigned and not notarized. macOS may display a Gatekeeper warning. Review the project README, run mock mode first, and do not place credentials in project files.
           releaseDraft: false
@@ -69,6 +118,7 @@ jobs:
           bundle_dir="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
           dmg_path="$(find "$bundle_dir" -maxdepth 1 -name '*.dmg' -print -quit)"
           test -n "$dmg_path"
-          checksum_file="Dildin_Build_Control_0.1.0_${{ matrix.arch }}.sha256"
+          app_version="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version")"
+          checksum_file="Dildin_Build_Control_${app_version}_${{ matrix.arch }}.sha256"
           shasum -a 256 "$dmg_path" | sed "s|$dmg_path|$(basename "$dmg_path")|" > "$checksum_file"
           gh release upload "${GITHUB_REF_NAME}" "$checksum_file" --clobber
