@@ -31,6 +31,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - name: Install Tauri Linux dependencies
         run: |
@@ -53,6 +55,9 @@ jobs:
 
       - name: Run Guided Run smoke check
         run: pnpm guided-run-smoke
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml

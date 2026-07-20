@@ -8216,6 +8216,123 @@ mod tests {
     }
 
     #[test]
+    fn project_config_round_trip_preserves_portable_contracts() {
+        let dir = temp_project_dir();
+        let providers = serde_json::json!([
+            {
+                "id": "mock_adapter",
+                "name": "Mock Adapter",
+                "type": "mock",
+                "enabled": true,
+                "runMode": "mock"
+            }
+        ]);
+        let command_policy = serde_json::json!({
+            "allow": ["pnpm build", "pnpm test"],
+            "approvalRequired": ["git commit"],
+            "deny": ["git push", "git reset --hard"]
+        });
+
+        let saved = save_project_config(ProjectConfigRequest {
+            project_path: dir.display().to_string(),
+            providers: providers.clone(),
+            command_policy: command_policy.clone(),
+        })
+        .unwrap();
+        let loaded = load_project_config(ProjectConfigLoadRequest {
+            project_path: dir.display().to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(loaded.providers, providers);
+        assert_eq!(loaded.command_policy, command_policy);
+        assert!(loaded.diagnostics.is_empty());
+        assert_eq!(
+            loaded
+                .providers_record
+                .as_ref()
+                .map(|record| &record.checksum),
+            Some(&saved.providers.checksum)
+        );
+        assert_eq!(
+            loaded.policy_record.as_ref().map(|record| &record.checksum),
+            Some(&saved.policy.checksum)
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn missing_project_config_uses_safe_defaults_with_diagnostics() {
+        let dir = temp_project_dir();
+
+        let loaded = load_project_config(ProjectConfigLoadRequest {
+            project_path: dir.display().to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(loaded.providers, serde_json::json!([]));
+        assert_eq!(
+            loaded.command_policy,
+            serde_json::json!({
+                "allow": [],
+                "approvalRequired": [],
+                "deny": []
+            })
+        );
+        assert!(loaded.providers_record.is_none());
+        assert!(loaded.policy_record.is_none());
+        assert!(loaded
+            .diagnostics
+            .iter()
+            .any(|item| item.subject == "providers" && item.level == "warning"));
+        assert!(loaded
+            .diagnostics
+            .iter()
+            .any(|item| item.subject == "policy" && item.level == "warning"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn malformed_project_config_is_reported_without_discarding_valid_contracts() {
+        let dir = temp_project_dir();
+        let dbc_dir = dir.join(".dbc");
+        fs::create_dir_all(&dbc_dir).unwrap();
+        fs::write(dbc_dir.join("providers.yaml"), "providers:\n  - [\n").unwrap();
+        fs::write(
+            dbc_dir.join("policy.yaml"),
+            "policy:\n  allow: []\n  approvalRequired: []\n  deny:\n    - git push\n",
+        )
+        .unwrap();
+
+        let loaded = load_project_config(ProjectConfigLoadRequest {
+            project_path: dir.display().to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(loaded.providers, serde_json::json!([]));
+        assert_eq!(
+            loaded.command_policy,
+            serde_json::json!({
+                "allow": [],
+                "approvalRequired": [],
+                "deny": ["git push"]
+            })
+        );
+        assert!(loaded.providers_record.is_some());
+        assert!(loaded.policy_record.is_some());
+        assert!(loaded.diagnostics.iter().any(|item| {
+            item.subject == "providers"
+                && item.level == "error"
+                && item.detail.contains("Cannot parse")
+        }));
+        assert!(!loaded
+            .diagnostics
+            .iter()
+            .any(|item| item.subject == "policy" && item.level == "error"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn mock_only_loop_does_not_require_operator_checklist_or_budget() {
         let dir = temp_project_dir();
         let request = start_request(

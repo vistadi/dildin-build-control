@@ -5,9 +5,12 @@ updates:
     schedule:
       interval: weekly
     groups:
-      frontend-dependencies:
+      frontend-non-major:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
 
@@ -16,9 +19,12 @@ updates:
     schedule:
       interval: weekly
     groups:
-      rust-dependencies:
+      rust-non-major:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
 
@@ -27,8 +33,11 @@ updates:
     schedule:
       interval: weekly
     groups:
-      github-actions:
+      github-actions-non-major:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
