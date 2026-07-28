@@ -30,6 +30,7 @@ function newestAsset(ext) {
 }
 
 const app = read("src/App.tsx");
+const bridge = read("src/tauriBridge.ts");
 const styles = read("src/styles.css");
 const pkg = JSON.parse(read("package.json"));
 const jsAsset = newestAsset(".js");
@@ -37,10 +38,13 @@ const cssAsset = newestAsset(".css");
 const builtJs = jsAsset ? readFileSync(jsAsset, "utf8") : "";
 const builtCss = cssAsset ? readFileSync(cssAsset, "utf8") : "";
 
-check("nav guided view", app.includes('{ id: "guided", label: "Guided Run"'), "Guided Run is present in the main navigation.");
+check("nav guided view", app.includes('{ id: "guided", label: "Run"'), "The primary Run entry is present in the main navigation.");
 check("guided component", app.includes("function GuidedRunView("), "GuidedRunView component exists.");
 check("guided start button", app.includes("Create and start safe run"), "Guided Run has the primary safe-start action.");
-check("advance action", app.includes("Advance run"), "Guided Run exposes HarnessRun advance.");
+check("preview lifecycle", bridge.includes("browserHarnessOverview") && bridge.includes("ready_for_decision"), "Browser preview persists a complete safe Harness lifecycle.");
+check("preview safety copy", app.includes("No files or providers are touched"), "Browser preview clearly states its safety boundary.");
+check("advanced navigation", app.includes("advancedNavOpen") && app.includes("Advanced"), "Expert consoles are grouped under Advanced navigation.");
+check("advance action", app.includes("Advance checks"), "Guided Run exposes the safe check advance action.");
 check("evidence action", app.includes("Generate EvidencePack"), "Guided Run exposes EvidencePack generation.");
 check("decision actions", ["Accept", "Request rework", "Reject"].every((text) => app.includes(text)), "Final decision actions exist.");
 check("reports checklist", app.includes('Panel title="Acceptance Checklist"'), "Reports include an acceptance checklist.");
@@ -49,7 +53,7 @@ check("settings quick setup", app.includes('title="Quick Setup"'), "Settings hav
 check("guided styles", [".guided-stepper", ".guided-action-card", ".contract-preview"].every((text) => styles.includes(text)), "Guided Run CSS is present.");
 check("acceptance styles", styles.includes(".acceptance-checklist"), "Acceptance Checklist CSS is present.");
 check("package script registered", pkg.scripts?.["guided-run-smoke"] === "node scripts/guided-run-smoke.mjs", "package.json exposes pnpm guided-run-smoke.");
-check("dist js built", builtJs.includes("Guided Run") && builtJs.includes("Create and start safe run"), "Production JS bundle contains Guided Run UI strings.");
+check("dist js built", builtJs.includes("Safe interactive preview") && builtJs.includes("Create and start safe run"), "Production JS bundle contains the new guided onboarding strings.");
 check("dist css built", builtCss.includes("guided-stepper") && builtCss.includes("acceptance-checklist"), "Production CSS bundle contains Guided Run styles.");
 
 for (const rel of [

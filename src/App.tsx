@@ -70,6 +70,7 @@ import {
   loadTaskSpec,
   resolveBackendLoopApproval,
   recoverProjectState,
+  resetBrowserHarnessOverview,
   retryBackendLoop,
   runControlledSmokeLoop,
   saveMemoryNote,
@@ -129,22 +130,25 @@ type View =
   | "settings";
 
 const navItems: Array<{ id: View; label: string; icon: typeof Home }> = [
-  { id: "home", label: "Control Tower", icon: Home },
+  { id: "guided", label: "Run", icon: ClipboardCheck },
+  { id: "approvals", label: "Approvals", icon: ShieldCheck },
+  { id: "reports", label: "Evidence", icon: FileText },
+  { id: "settings", label: "Settings", icon: KeyRound },
+  { id: "home", label: "Overview", icon: Home },
   { id: "projects", label: "Projects", icon: FolderGit2 },
   { id: "workspace", label: "Workspace", icon: Boxes },
-  { id: "guided", label: "Guided Run", icon: ClipboardCheck },
   { id: "tasks", label: "Tasks", icon: ListChecks },
   { id: "preflight", label: "Preflight", icon: Gauge },
   { id: "agents", label: "AI Team", icon: Bot },
-  { id: "loops", label: "Loops", icon: RotateCcw },
-  { id: "approvals", label: "Approvals", icon: ShieldCheck },
-  { id: "reports", label: "Reports", icon: FileText },
-  { id: "settings", label: "Settings", icon: KeyRound },
+  { id: "loops", label: "Loop Console", icon: RotateCcw },
 ];
+
+const primaryNavIds = new Set<View>(["guided", "approvals", "reports", "settings"]);
 
 export function App() {
   const [state, setState] = useState<AppState>(() => loadState());
-  const [view, setView] = useState<View>("home");
+  const [view, setView] = useState<View>("guided");
+  const [advancedNavOpen, setAdvancedNavOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const [activeStep, setActiveStep] = useState(0);
   const [currentLoop, setCurrentLoop] = useState<LoopRunSnapshot | null>(null);
@@ -309,6 +313,16 @@ export function App() {
 
   function patchState(patch: Partial<AppState>) {
     setState((current) => ({ ...current, ...patch }));
+  }
+
+  function resetDemo() {
+    resetBrowserHarnessOverview();
+    setHarnessOverview({ contracts: [], slices: [], runs: [], evidencePacks: [] });
+    setCurrentLoop(null);
+    setRunning(false);
+    setActiveStep(0);
+    setState(resetState());
+    setView("guided");
   }
 
   async function refreshLoopHistory() {
@@ -1248,9 +1262,17 @@ export function App() {
         setState((current) => ({ ...current, loopSteps: loop.steps }));
       }
       await refreshHarnessOverview(project.path);
-      setView("loops");
+      setView("guided");
       setState((current) => ({
         ...current,
+        approvals: isTauriRuntime() ? current.approvals : [],
+        loopSteps: isTauriRuntime()
+          ? current.loopSteps
+          : loopTemplate.map((step, index) => ({
+              ...step,
+              status: index === 0 ? "running" : "waiting",
+              output: index === 0 ? "Safe preview run started." : "",
+            })),
         audit: [
           {
             id: uid("AUD"),
@@ -1268,8 +1290,24 @@ export function App() {
   }
 
   async function createTaskAndStartSafe(task: Task) {
-    createTask(task);
-    await startSimpleHarnessForTask(task.id, task);
+    const snapshot = stateRef.current;
+    const project = snapshot.projects.find((item) => item.id === snapshot.activeProjectId) ?? snapshot.projects[0];
+    let runnableTask = task;
+    if (project) {
+      try {
+        const record = await saveTaskSpec(project.path, task);
+        runnableTask = {
+          ...task,
+          specPath: record.path,
+          specChecksum: record.checksum,
+          specUpdatedAt: record.updatedAt,
+        };
+      } catch {
+        // The Harness start still provides an actionable error if native persistence is unavailable.
+      }
+    }
+    createTask(runnableTask);
+    await startSimpleHarnessForTask(runnableTask.id, runnableTask);
   }
 
   async function startHarnessForTask(taskId: string) {
@@ -1313,6 +1351,43 @@ export function App() {
     try {
       const advanced = await advanceHarnessRun(run.id);
       await refreshHarnessOverview(advanced.projectPath);
+      if (!isTauriRuntime()) {
+        const previewStageIndex: Record<string, number> = {
+          slice_running: 0,
+          self_checked: 2,
+          reviewed: 4,
+          security_reviewed: 5,
+          evidence_ready: loopTemplate.length,
+        };
+        const passedCount = previewStageIndex[advanced.status] ?? 0;
+        setState((current) => ({
+          ...current,
+          loopSteps: loopTemplate.map((step, index) => {
+            const passed = index < passedCount;
+            const active = index === passedCount && passedCount < loopTemplate.length;
+            return {
+              ...step,
+              status: passed ? "passed" : active ? "running" : "waiting",
+              output: passed ? `${step.state} completed in safe preview.` : active ? `${step.state} is ready to advance.` : "",
+              evidence: passed ? `Verified preview evidence for ${step.state}.` : step.evidence,
+              artifactPath: passed ? `.dbc/artifacts/preview/${step.id}.md` : undefined,
+              evidencePath: passed ? `.dbc/evidence/preview/${step.id}.json` : undefined,
+              structuredReport:
+                passed && ["review", "security", "accept"].includes(step.id)
+                  ? {
+                      verdict: "pass",
+                      summary: `${step.state} checks passed in the deterministic preview.`,
+                      actions: [],
+                      filesTouched: [],
+                      evidence: [`.dbc/evidence/preview/${step.id}.json`],
+                      risks: [],
+                      nextAction: advanced.status === "evidence_ready" ? "Generate the EvidencePack." : "Advance the run.",
+                    }
+                  : undefined,
+            };
+          }),
+        }));
+      }
       if (advanced.compatibilityLoopRunId && isTauriRuntime()) {
         const loop = await getBackendLoop(advanced.compatibilityLoopRunId);
         setCurrentLoop(loop);
@@ -1353,6 +1428,14 @@ export function App() {
       await refreshHarnessOverview(run.projectPath);
       setState((current) => ({
         ...current,
+        tasks: current.tasks.map((task) =>
+          task.id === run.taskId
+            ? {
+                ...task,
+                status: decision === "accepted" ? "done" : decision === "rework" ? "ready" : "blocked",
+              }
+            : task,
+        ),
         audit: [
           {
             id: uid("AUD"),
@@ -1791,11 +1874,11 @@ export function App() {
           <div className="brand-mark">DBC</div>
           <div>
             <strong>Dildin Build Control</strong>
-            <span>AI loop operating layer</span>
+            <span>Evidence before merge</span>
           </div>
         </div>
         <nav className="nav-list">
-          {navItems.map((item) => (
+          {navItems.filter((item) => primaryNavIds.has(item.id)).map((item) => (
             <button
               key={item.id}
               className={view === item.id ? "nav-item active" : "nav-item"}
@@ -1809,21 +1892,39 @@ export function App() {
               ) : null}
             </button>
           ))}
+          <button className="nav-group-toggle" onClick={() => setAdvancedNavOpen((open) => !open)} aria-expanded={advancedNavOpen}>
+            <Boxes size={17} />
+            <span>Advanced</span>
+            <strong>{advancedNavOpen ? "−" : "+"}</strong>
+          </button>
+          {advancedNavOpen
+            ? navItems.filter((item) => !primaryNavIds.has(item.id)).map((item) => (
+                <button
+                  key={item.id}
+                  className={view === item.id ? "nav-item advanced active" : "nav-item advanced"}
+                  onClick={() => setView(item.id)}
+                  title={item.label}
+                >
+                  <item.icon size={17} />
+                  <span>{item.label}</span>
+                </button>
+              ))
+            : null}
         </nav>
         <div className="sidebar-footer">
-          <span>{isTauriRuntime() ? "Desktop runtime" : "Browser preview"}</span>
-          <strong>Official CLI/API only</strong>
+          <span>{isTauriRuntime() ? "Desktop runtime" : "Safe interactive preview"}</span>
+          <strong>{isTauriRuntime() ? "Official CLI/API only" : "No files or providers are touched"}</strong>
         </div>
       </aside>
 
       <main className="content">
         <header className="topbar">
           <div>
-            <p className="eyebrow">MVP control surface</p>
+            <p className="eyebrow">Evidence-backed delivery</p>
             <h1>{pageTitle(view)}</h1>
           </div>
           <div className="topbar-actions">
-            <button className="ghost-btn" onClick={() => setState(resetState())}>
+            <button className="ghost-btn" onClick={resetDemo}>
               <RotateCcw size={16} />
               Reset demo
             </button>
@@ -1833,9 +1934,9 @@ export function App() {
                 Stop loop
               </button>
             ) : (
-              <button className="primary-btn" onClick={() => setView("guided")}>
-                <ClipboardCheck size={16} />
-                Guided run
+              <button className="primary-btn" onClick={() => setView(view === "guided" ? "reports" : "guided")}>
+                {view === "guided" ? <FileText size={16} /> : <ClipboardCheck size={16} />}
+                {view === "guided" ? "View evidence" : "Open run"}
               </button>
             )}
           </div>
@@ -2951,12 +3052,14 @@ function GuidedRunView({
   const [allowedPaths, setAllowedPaths] = useState("src\nsrc-tauri\nREADME.md\ndocs\n.dbc");
   const [outOfScope, setOutOfScope] = useState(".env\nnode_modules\nsrc-tauri/target\ndist");
   const [decisionNote, setDecisionNote] = useState("");
-  const activeTask = state.tasks[0];
+  const latestRun = harnessOverview.runs[0];
+  const activeTask = latestRun
+    ? state.tasks.find((task) => task.id === latestRun.taskId)
+    : currentLoop
+      ? state.tasks.find((task) => task.id === currentLoop.taskId)
+      : undefined;
   const latestContract = activeTask ? latestContractForTask(activeTask.id, harnessOverview.contracts) : undefined;
   const latestSlice = activeTask ? latestSliceForTask(activeTask.id, harnessOverview.slices) : undefined;
-  const latestRun = activeTask
-    ? harnessOverview.runs.find((run) => run.taskId === activeTask.id) ?? harnessOverview.runs[0]
-    : harnessOverview.runs[0];
   const latestPack = latestRun
     ? harnessOverview.evidencePacks.find((pack) => pack.harnessRunId === latestRun.id) ?? harnessOverview.evidencePacks[0]
     : harnessOverview.evidencePacks[0];
@@ -2964,23 +3067,28 @@ function GuidedRunView({
   const allStepsPassed = state.loopSteps.length > 0 && state.loopSteps.every((step) => step.status === "passed");
   const hasEvidenceLinks = state.loopSteps.some((step) => step.evidencePath || step.artifactPath);
   const hasStructuredReview = state.loopSteps.some((step) => step.structuredReport);
-  const readyForAccept = Boolean(latestRun && latestPack && allStepsPassed && pendingApprovals.length === 0);
-  const activeRunCanAdvance = Boolean(latestRun && !["accepted", "rejected", "blocked", "shipped"].includes(latestRun.status));
+  const hasFinalDecision = Boolean(latestPack?.finalDecision);
+  const readyForAccept = Boolean(latestRun && latestPack && !hasFinalDecision && allStepsPassed && pendingApprovals.length === 0);
+  const activeRunCanAdvance = Boolean(latestRun && !["evidence_ready", "accepted", "rejected", "blocked", "shipped"].includes(latestRun.status));
   const activeRunCanPack = Boolean(latestRun && ["evidence_ready", "accepted", "rework"].includes(latestRun.status));
-  const completeness = [
-    Boolean(activeTask),
-    Boolean(latestContract),
-    Boolean(latestSlice),
-    Boolean(latestRun),
-    allStepsPassed,
-    hasEvidenceLinks,
-    hasStructuredReview,
-    Boolean(latestPack),
-    pendingApprovals.length === 0,
-  ].filter(Boolean).length;
+  const completeness = activeTask
+    ? [
+        Boolean(activeTask),
+        Boolean(latestContract),
+        Boolean(latestSlice),
+        Boolean(latestRun),
+        allStepsPassed,
+        hasEvidenceLinks,
+        hasStructuredReview,
+        Boolean(latestPack),
+        pendingApprovals.length === 0,
+      ].filter(Boolean).length
+    : 0;
   const currentStage =
     !activeTask
       ? "paste_tz"
+      : hasFinalDecision
+        ? "decided"
       : !latestRun
         ? "ready_to_run"
         : !latestPack
@@ -3030,17 +3138,25 @@ function GuidedRunView({
     setTz("");
   }
 
+  function loadDemoTask() {
+    setTitle("Prove a safe README change");
+    setTz("Update one sentence in README.md, keep every other file untouched, run the configured checks, and produce evidence that the change stayed inside scope.");
+    setAcceptance("Only README.md is changed\nConfigured build and test checks pass\nReview and security checks have no critical findings\nEvidencePack records scope, checks, risks, and final decision");
+    setAllowedPaths("README.md");
+    setOutOfScope(".env\nnode_modules\nsrc\nsrc-tauri\ndist");
+  }
+
   async function decide(decision: "accepted" | "rework" | "rejected") {
     if (!latestRun) return;
     await onDecideHarnessResult(latestRun.id, decision, decisionNote.trim());
   }
 
   const wizardSteps = [
-    { label: "TZ", done: Boolean(activeTask), detail: activeTask ? activeTask.title : "Paste task brief" },
-    { label: "Contract", done: Boolean(latestContract), detail: latestContract?.status ?? "not created" },
-    { label: "Slice", done: Boolean(latestSlice), detail: latestSlice?.status ?? "not created" },
+    { label: "Task", done: Boolean(activeTask), detail: activeTask ? activeTask.title : "Describe the change" },
+    { label: "Scope", done: Boolean(latestContract), detail: latestContract?.status ?? "not bounded" },
+    { label: "Work", done: Boolean(latestSlice), detail: latestSlice?.status ?? "not prepared" },
     { label: "Run", done: Boolean(latestRun), detail: latestRun?.status ?? "not started" },
-    { label: "Evidence", done: Boolean(latestPack), detail: latestPack?.status ?? "not generated" },
+    { label: "Proof", done: Boolean(latestPack), detail: latestPack?.status ?? "not generated" },
     { label: "Decision", done: Boolean(latestPack?.finalDecision), detail: latestPack?.finalDecision || "pending" },
   ];
 
@@ -3066,28 +3182,39 @@ function GuidedRunView({
           </div>
         }
       >
+        {!isTauriRuntime() ? (
+          <div className="runtime-notice" role="status">
+            <ShieldCheck size={18} />
+            <div>
+              <strong>Safe interactive preview</strong>
+              <p>Try the complete lifecycle here. Preview evidence is deterministic and no project files, providers, or credentials are touched.</p>
+            </div>
+          </div>
+        ) : null}
         <OperatorHint
-          step="Production path"
+          step="One guided path"
           title={
             currentStage === "paste_tz"
-              ? "Paste a TZ and start a safe Harness run"
+              ? "Describe one bounded change"
+              : currentStage === "decided"
+                ? `Result ${displayValue(latestPack?.finalDecision)}`
               : currentStage === "ready_to_run"
-                ? "Task is ready for a safe Harness run"
+                ? "The safe run is ready"
                 : currentStage === "evidence_ready"
-                  ? "Generate the Evidence Pack"
+                  ? "Generate the proof package"
                   : currentStage === "decision_ready"
                     ? "Make the final decision"
-                    : "Continue the Harness lifecycle"
+                    : "Advance the verified checks"
           }
-          detail="This screen is the normal user path. Expert screens remain available, but the complete lifecycle should be operable from here."
-          status={readyForAccept ? "ready" : currentStage === "paste_tz" ? "waiting" : "running"}
+          detail="Run is the normal path. Advanced screens remain available for provider, policy, and recovery diagnostics."
+          status={latestPack?.finalDecision === "accepted" ? "accepted" : readyForAccept ? "ready" : currentStage === "paste_tz" ? "waiting" : "running"}
         />
         <DecisionStrip
           items={[
-            { label: "Completeness", value: `${completeness}/9`, tone: completeness >= 8 ? "ok" : completeness >= 4 ? "warning" : "failed" },
+            { label: "Proof readiness", value: `${completeness}/9`, tone: completeness >= 8 ? "ok" : completeness >= 4 ? "warning" : "failed" },
             { label: "Current stage", value: displayValue(currentStage), tone: currentStage === "decision_ready" ? "ok" : "warning" },
             { label: "Pending approvals", value: String(pendingApprovals.length), tone: pendingApprovals.length ? "warning" : "ok" },
-            { label: "Runtime", value: isTauriRuntime() ? "desktop" : "browser preview", tone: isTauriRuntime() ? "ok" : "warning" },
+            { label: "Runtime", value: isTauriRuntime() ? "desktop" : "safe preview", tone: "ok" },
           ]}
         />
         <div className="guided-stepper">
@@ -3102,7 +3229,16 @@ function GuidedRunView({
       </Panel>
 
       <div className="two-column guided-grid">
-        <Panel title="1. Task From TZ" icon={FileText}>
+        <Panel
+          title="1. Describe the change"
+          icon={FileText}
+          action={
+            <button className="ghost-btn compact-btn" onClick={loadDemoTask}>
+              <Play size={15} />
+              Load demo task
+            </button>
+          }
+        >
           <div className="task-composer">
             <div className="composer-grid">
               <label>
@@ -3128,8 +3264,8 @@ function GuidedRunView({
                 <textarea value={outOfScope} onChange={(event) => setOutOfScope(event.target.value)} />
               </label>
               <div className="guided-action-card">
-                <strong>Recommended start</strong>
-                <p>DBC creates the task, freezes/approves a safe contract path, creates a WorkSlice, and starts HarnessRun in safe mode.</p>
+                <strong>One safe start</strong>
+                <p>DBC bounds the scope, creates the contract and work slice, then starts one deterministic run. No second start action is required.</p>
                 <button className="primary-btn" onClick={createAndRun} disabled={!title.trim() || !tz.trim()}>
                   <Play size={16} />
                   Create and start safe run
@@ -3139,7 +3275,7 @@ function GuidedRunView({
           </div>
         </Panel>
 
-        <Panel title="2. Current Contract & Slice" icon={ListChecks}>
+        <Panel title="2. Bounded scope" icon={ListChecks}>
           {activeTask ? (
             <div className="contract-preview">
               <span className={`status-pill ${activeTask.status}`}>{displayValue(activeTask.status)}</span>
@@ -3158,10 +3294,12 @@ function GuidedRunView({
                   <FileText size={16} />
                   Save spec
                 </button>
-                <button className="primary-btn" onClick={() => startSafeRun(activeTask.id)} disabled={Boolean(latestRun)}>
-                  <Play size={16} />
-                  Start safe run
-                </button>
+                {!latestRun ? (
+                  <button className="primary-btn" onClick={() => startSafeRun(activeTask.id)}>
+                    <Play size={16} />
+                    Start safe run
+                  </button>
+                ) : null}
               </div>
             </div>
           ) : (
@@ -3175,7 +3313,7 @@ function GuidedRunView({
       </div>
 
       <div className="two-column guided-grid">
-        <Panel title="3. Execute & Advance" icon={RotateCcw}>
+        <Panel title="3. Run the checks" icon={RotateCcw}>
           {latestRun ? (
             <div className="audit-list">
               <div className="audit-row">
@@ -3187,7 +3325,7 @@ function GuidedRunView({
               <div className="button-row">
                 <button className="primary-btn" onClick={() => onAdvanceHarness(latestRun)} disabled={!activeRunCanAdvance}>
                   <ChevronRight size={16} />
-                  Advance run
+                  Advance checks
                 </button>
                 <button className="ghost-btn" onClick={() => onNavigate("loops")}>
                   <TerminalSquare size={16} />
@@ -3205,26 +3343,30 @@ function GuidedRunView({
           ) : (
             <div className="empty-state">
               <span className="status-pill warning">not started</span>
-              <strong>No HarnessRun yet</strong>
-              <p>Create and start a safe run from the TZ step.</p>
+              <strong>No safe run yet</strong>
+              <p>Describe one bounded change above, or load the demo task to see a complete EvidencePack flow.</p>
             </div>
           )}
         </Panel>
 
-        <Panel title="4. Evidence & Decision" icon={BadgeCheck}>
+        <Panel title="4. Proof & decision" icon={BadgeCheck}>
           <div className="decision-box">
             <DecisionStrip
               items={[
-                { label: "Steps passed", value: allStepsPassed ? "yes" : "no", tone: allStepsPassed ? "ok" : "warning" },
-                { label: "Evidence links", value: hasEvidenceLinks ? "present" : "missing", tone: hasEvidenceLinks ? "ok" : "warning" },
-                { label: "Review/security", value: hasStructuredReview ? "present" : "missing", tone: hasStructuredReview ? "ok" : "warning" },
-                { label: "Pack", value: latestPack ? displayValue(latestPack.status) : "missing", tone: latestPack ? "ok" : "warning" },
+                { label: "Checks", value: allStepsPassed ? "passed" : "pending", tone: allStepsPassed ? "ok" : "warning" },
+                { label: "Artifacts", value: hasEvidenceLinks ? "linked" : "pending", tone: hasEvidenceLinks ? "ok" : "warning" },
+                { label: "Review", value: hasStructuredReview ? "passed" : "pending", tone: hasStructuredReview ? "ok" : "warning" },
+                { label: "EvidencePack", value: latestPack ? displayValue(latestPack.status) : "pending", tone: latestPack ? "ok" : "warning" },
               ]}
             />
+            <div className="evidence-proof">
+              <strong>What the EvidencePack proves</strong>
+              <p>Approved scope, executed checks, review and security verdicts, unresolved risks, and the final human decision.</p>
+            </div>
             <div className="button-row">
-              <button className="primary-btn" onClick={() => latestRun && onGenerateEvidencePack(latestRun)} disabled={!activeRunCanPack}>
+              <button className="primary-btn" onClick={() => latestRun && onGenerateEvidencePack(latestRun)} disabled={!activeRunCanPack || Boolean(latestPack)}>
                 <ClipboardCheck size={16} />
-                Generate EvidencePack
+                {latestPack ? "Proof package ready" : "Generate proof package"}
               </button>
               <button className="ghost-btn" onClick={() => onNavigate("reports")}>
                 <FileText size={16} />
@@ -3236,22 +3378,24 @@ function GuidedRunView({
               <textarea value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} placeholder="Decision reason, remaining risk, or rework request." />
             </label>
             <div className="decision-actions">
-              <button className="primary-btn" onClick={() => decide("accepted")} disabled={!readyForAccept}>
+              <button className="primary-btn" onClick={() => decide("accepted")} disabled={!readyForAccept || hasFinalDecision}>
                 <CheckCircle2 size={16} />
                 Accept
               </button>
-              <button className="warning-btn" onClick={() => decide("rework")} disabled={!latestRun}>
+              <button className="warning-btn" onClick={() => decide("rework")} disabled={!latestRun || hasFinalDecision}>
                 <RotateCcw size={16} />
                 Request rework
               </button>
-              <button className="danger-btn" onClick={() => decide("rejected")} disabled={!latestRun}>
+              <button className="danger-btn" onClick={() => decide("rejected")} disabled={!latestRun || hasFinalDecision}>
                 <XCircle size={16} />
                 Reject
               </button>
             </div>
             <p className="helper-text">
-              {readyForAccept
-                ? "All primary gates are green. You can accept the result."
+              {hasFinalDecision
+                ? `Decision finalized: ${displayValue(latestPack?.finalDecision)}. Open Evidence to inspect the proof package.`
+                : readyForAccept
+                  ? "All primary gates are green. You can accept the result."
                 : "Accept stays disabled until the run, evidence pack, step evidence, and approvals are complete."}
             </p>
           </div>
@@ -4732,13 +4876,16 @@ function ReportsView({
   const hasMemoryFiles = state.memory.some((note) => Boolean(note.path && note.checksum));
   const latestPack = harnessOverview.evidencePacks[0];
   const latestRun = harnessOverview.runs[0];
-  const finalStatus = allStepsPassed && pendingApprovals.length === 0 ? "accepted" : "blocked";
+  const evidenceReady = Boolean(latestPack && allStepsPassed && pendingApprovals.length === 0);
+  const finalStatus = latestPack?.finalDecision || (evidenceReady ? "ready_for_decision" : "blocked");
+  const canAccept = evidenceReady && !latestPack?.finalDecision;
   const missingEvidenceCount = [
     !allStepsPassed,
     !hasArtifacts,
     !hasEvidenceFiles,
     !hasStructuredReports,
     !hasTaskSpec,
+    !latestPack,
     pendingApprovals.length > 0,
   ].filter(Boolean).length;
   const acceptanceChecks = [
@@ -4757,16 +4904,16 @@ function ReportsView({
       `Task: ${task?.id ?? "TASK"}`,
       `Task status: ${task?.status ?? "draft"}`,
       `Task spec: ${hasTaskSpec ? `${task?.specPath}#${task?.specChecksum}` : "not persisted"}`,
-      `Loop manifest: ${currentLoop?.manifestPath ?? "not started"}`,
-      `Backend JSON report: ${currentLoop?.reportJsonPath ?? "not started"}`,
-      `Backend Markdown report: ${currentLoop?.reportMarkdownPath ?? "not started"}`,
-      `Git baseline: ${currentLoop?.gitBaselinePath ?? "not started"}`,
-      `Commit proposal: ${currentLoop?.commitProposalPath ?? "not started"}`,
-      `Security report: ${currentLoop?.securityReportPath ?? "not started"}`,
+      `Loop manifest: ${currentLoop?.manifestPath ?? latestRun?.manifestPath ?? "not started"}`,
+      `Backend JSON report: ${currentLoop?.reportJsonPath ?? (!isTauriRuntime() && latestRun ? "not generated in safe preview" : "not started")}`,
+      `Backend Markdown report: ${currentLoop?.reportMarkdownPath ?? (!isTauriRuntime() && latestRun ? "not generated in safe preview" : "not started")}`,
+      `Git baseline: ${currentLoop?.gitBaselinePath ?? (!isTauriRuntime() && latestRun ? "not generated in safe preview" : "not started")}`,
+      `Commit proposal: ${currentLoop?.commitProposalPath ?? (!isTauriRuntime() && latestRun ? "not generated in safe preview" : "not started")}`,
+      `Security report: ${currentLoop?.securityReportPath ?? (!isTauriRuntime() && latestRun ? "represented by deterministic preview evidence" : "not started")}`,
       `Harness EvidencePack: ${latestPack?.manifestPath ?? "not generated"}`,
       `Harness final decision: ${latestPack?.finalDecision || "pending"}`,
       `Final status: ${finalStatus}`,
-      `Cost: $${totalCost.toFixed(2)} estimated`,
+      `Cost: $${(isTauriRuntime() ? totalCost : 0).toFixed(2)} estimated${isTauriRuntime() ? "" : " (safe preview)"}`,
       `Evidence gate: ${allStepsPassed ? "all loop steps passed" : "loop has incomplete or failed steps"}`,
       `Artifact gate: ${hasArtifacts ? "backend artifacts recorded" : "no backend artifacts recorded yet"}`,
       `Evidence file gate: ${hasEvidenceFiles ? "machine-readable evidence recorded" : "no evidence snapshot recorded yet"}`,
@@ -4779,12 +4926,16 @@ function ReportsView({
       ...state.loopSteps.map((step) => `- ${step.state}: ${step.status} - ${step.evidence}${step.evidencePath ? ` (${step.evidencePath})` : ""}`),
       "",
       "## Backend Acceptance Package",
-      currentLoop ? `- Manifest: ${currentLoop.manifestPath}` : "- Manifest: not started",
-      currentLoop ? `- JSON: ${currentLoop.reportJsonPath}` : "- JSON: not started",
-      currentLoop ? `- Markdown: ${currentLoop.reportMarkdownPath}` : "- Markdown: not started",
-      currentLoop ? `- Git baseline: ${currentLoop.gitBaselinePath}` : "- Git baseline: not started",
-      currentLoop ? `- Commit proposal: ${currentLoop.commitProposalPath}` : "- Commit proposal: not started",
-      currentLoop ? `- Security: ${currentLoop.securityReportPath}` : "- Security: not started",
+      currentLoop
+        ? `- Manifest: ${currentLoop.manifestPath}`
+        : latestRun
+          ? `- Harness manifest: ${latestRun.manifestPath}`
+          : "- Manifest: not started",
+      currentLoop ? `- JSON: ${currentLoop.reportJsonPath}` : `- JSON: ${latestRun && !isTauriRuntime() ? "not generated in safe preview" : "not started"}`,
+      currentLoop ? `- Markdown: ${currentLoop.reportMarkdownPath}` : `- Markdown: ${latestRun && !isTauriRuntime() ? "not generated in safe preview" : "not started"}`,
+      currentLoop ? `- Git baseline: ${currentLoop.gitBaselinePath}` : `- Git baseline: ${latestRun && !isTauriRuntime() ? "not generated in safe preview" : "not started"}`,
+      currentLoop ? `- Commit proposal: ${currentLoop.commitProposalPath}` : `- Commit proposal: ${latestRun && !isTauriRuntime() ? "not generated in safe preview" : "not started"}`,
+      currentLoop ? `- Security: ${currentLoop.securityReportPath}` : `- Security: ${latestRun && !isTauriRuntime() ? "represented by deterministic preview evidence" : "not started"}`,
       "",
       "## Harness Evidence Packs",
       ...(harnessOverview.evidencePacks.length
@@ -4819,7 +4970,7 @@ function ReportsView({
         ? pendingApprovals.map((approval) => `- Pending approval: ${approval.action}`)
         : ["- No unresolved approval risks recorded."]),
     ].join("\n");
-  }, [allStepsPassed, currentLoop, finalStatus, harnessOverview.evidencePacks, hasArtifacts, hasEvidenceFiles, hasMemoryFiles, hasStructuredReports, hasTaskSpec, pendingApprovals, state.loopSteps, state.memory, task, totalCost]);
+  }, [allStepsPassed, currentLoop, finalStatus, harnessOverview.evidencePacks, hasArtifacts, hasEvidenceFiles, hasMemoryFiles, hasStructuredReports, hasTaskSpec, latestRun, pendingApprovals, state.loopSteps, state.memory, task, totalCost]);
 
   async function decide(decision: "accepted" | "rework" | "rejected") {
     setLocalDecision(decision);
@@ -4834,12 +4985,12 @@ function ReportsView({
         step="Step 4"
         title="Decide from evidence, not vibes"
         detail="Reports should answer whether the work can be accepted, needs rework, or must be rejected. Missing evidence keeps the result blocked."
-        status={finalStatus === "accepted" ? "accepted" : "blocked"}
+        status={finalStatus === "accepted" ? "accepted" : canAccept ? "ready" : "blocked"}
       />
       <Panel title="Acceptance Decision" icon={BadgeCheck}>
         <DecisionStrip
           items={[
-            { label: "Final status", value: finalStatus, tone: finalStatus === "accepted" ? "ok" : "failed" },
+            { label: "Final status", value: finalStatus, tone: finalStatus === "accepted" || finalStatus === "ready_for_decision" ? "ok" : "failed" },
             { label: "Evidence Pack", value: latestPack ? displayValue(latestPack.status) : "not generated", tone: latestPack ? "ok" : "warning" },
             { label: "Missing gates", value: String(missingEvidenceCount), tone: missingEvidenceCount ? "warning" : "ok" },
             { label: "Pending approvals", value: String(pendingApprovals.length), tone: pendingApprovals.length ? "warning" : "ok" },
@@ -4855,24 +5006,26 @@ function ReportsView({
             />
           </label>
           <div className="decision-actions">
-            <button className="primary-btn" onClick={() => decide("accepted")} disabled={!latestRun || finalStatus !== "accepted" || !latestPack}>
+            <button className="primary-btn" onClick={() => decide("accepted")} disabled={!latestRun || !canAccept}>
               <CheckCircle2 size={16} />
               Accept
             </button>
-            <button className="warning-btn" onClick={() => decide("rework")} disabled={!latestRun}>
+            <button className="warning-btn" onClick={() => decide("rework")} disabled={!latestRun || Boolean(latestPack?.finalDecision)}>
               <RotateCcw size={16} />
               Request rework
             </button>
-            <button className="danger-btn" onClick={() => decide("rejected")} disabled={!latestRun}>
+            <button className="danger-btn" onClick={() => decide("rejected")} disabled={!latestRun || Boolean(latestPack?.finalDecision)}>
               <XCircle size={16} />
               Reject
             </button>
           </div>
           <p className="helper-text">
-            {latestRun
-              ? localDecision
-                ? `Latest local decision: ${displayValue(localDecision)}. Desktop mode also writes it through Harness Engine.`
-                : "Accept is enabled only when evidence is complete and no approval is pending."
+            {latestPack?.finalDecision
+              ? `Decision finalized: ${displayValue(latestPack.finalDecision)}. This EvidencePack now records the human outcome.`
+              : latestRun
+                ? localDecision
+                  ? `Latest local decision: ${displayValue(localDecision)}. Desktop mode also writes it through Harness Engine.`
+                  : "Accept is enabled only when evidence is complete and no approval is pending."
               : "Start a Harness run before making the final decision."}
           </p>
         </div>

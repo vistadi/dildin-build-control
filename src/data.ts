@@ -360,17 +360,7 @@ export const initialState: AppState = {
     },
   ],
   loopSteps: loopTemplate,
-  approvals: [
-    {
-      id: "APR-001",
-      action: "git push origin dbc/task-001",
-      reason: "Publishing code outside the local workspace is a sensitive action.",
-      requester: "DevOps",
-      risk: "high",
-      preview: "Command is blocked until explicit approval. Branch contains generated MVP shell changes.",
-      status: "pending",
-    },
-  ],
+  approvals: [],
   audit: [
     {
       id: "AUD-001",
@@ -387,26 +377,7 @@ export const initialState: AppState = {
       result: "Approval required by outbound code policy.",
     },
   ],
-  costs: [
-    {
-      id: "COST-001",
-      provider: "Mock Adapter",
-      model: "dbc-planner",
-      agent: "Team Lead",
-      taskId: "TASK-001",
-      amount: 0.84,
-      confidence: "estimated",
-    },
-    {
-      id: "COST-002",
-      provider: "Mock Adapter",
-      model: "dbc-coder",
-      agent: "Developer",
-      taskId: "TASK-001",
-      amount: 2.9,
-      confidence: "estimated",
-    },
-  ],
+  costs: [],
   memory: [
     {
       id: "MEM-001",

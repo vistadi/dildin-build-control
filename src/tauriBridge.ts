@@ -34,6 +34,22 @@ export function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+let browserHarnessOverview: HarnessOverview = {
+  contracts: [],
+  slices: [],
+  runs: [],
+  evidencePacks: [],
+};
+
+export function resetBrowserHarnessOverview() {
+  browserHarnessOverview = {
+    contracts: [],
+    slices: [],
+    runs: [],
+    evidencePacks: [],
+  };
+}
+
 export function parseArgsTemplate(template: string, prompt: string) {
   return parseCliArgsTemplate(template, prompt);
 }
@@ -534,7 +550,7 @@ export async function loadTaskSpec(projectPath: string, taskId: string): Promise
 
 export async function createTaskContract(projectId: string, projectPath: string, task: Task): Promise<TaskContract> {
   if (!isTauriRuntime()) {
-    return {
+    const contract: TaskContract = {
       id: `browser-contract-${task.id}-v1`,
       projectId,
       projectPath,
@@ -560,6 +576,11 @@ export async function createTaskContract(projectId: string, projectPath: string,
       artifactPath: `${projectPath}/.dbc/contracts/browser-contract-${task.id}-v1.json`,
       checksum: "browser-preview",
     };
+    browserHarnessOverview = {
+      ...browserHarnessOverview,
+      contracts: [contract, ...browserHarnessOverview.contracts.filter((item) => item.id !== contract.id)],
+    };
+    return contract;
   }
 
   const contract = await invoke<BackendTaskContract>("create_task_contract", {
@@ -586,12 +607,38 @@ export async function createTaskContract(projectId: string, projectPath: string,
 }
 
 export async function freezeTaskContract(contractId: string): Promise<TaskContract> {
-  if (!isTauriRuntime()) throw new Error("Contract freeze requires the Tauri desktop runtime.");
+  if (!isTauriRuntime()) {
+    const contract = browserHarnessOverview.contracts.find((item) => item.id === contractId);
+    if (!contract) throw new Error(`Preview contract not found: ${contractId}`);
+    const frozen: TaskContract = {
+      ...contract,
+      status: "waiting_approval",
+      frozenAt: String(Date.now()),
+    };
+    browserHarnessOverview = {
+      ...browserHarnessOverview,
+      contracts: browserHarnessOverview.contracts.map((item) => (item.id === contractId ? frozen : item)),
+    };
+    return frozen;
+  }
   return fromBackendTaskContract(await invoke<BackendTaskContract>("freeze_task_contract", { contractId }));
 }
 
 export async function approveTaskContract(contractId: string): Promise<TaskContract> {
-  if (!isTauriRuntime()) throw new Error("Contract approval requires the Tauri desktop runtime.");
+  if (!isTauriRuntime()) {
+    const contract = browserHarnessOverview.contracts.find((item) => item.id === contractId);
+    if (!contract) throw new Error(`Preview contract not found: ${contractId}`);
+    const approved: TaskContract = {
+      ...contract,
+      status: "approved",
+      approvedAt: String(Date.now()),
+    };
+    browserHarnessOverview = {
+      ...browserHarnessOverview,
+      contracts: browserHarnessOverview.contracts.map((item) => (item.id === contractId ? approved : item)),
+    };
+    return approved;
+  }
   return fromBackendTaskContract(await invoke<BackendTaskContract>("approve_task_contract", { contractId }));
 }
 
@@ -608,7 +655,7 @@ export async function createWorkSlice(
   options: { approvalRequired?: boolean; commandsAllowed?: string[]; sequence?: number } = {},
 ): Promise<WorkSlice> {
   if (!isTauriRuntime()) {
-    return {
+    const slice: WorkSlice = {
       id: `browser-slice-${task.id}-${Date.now()}`,
       projectId,
       projectPath,
@@ -629,6 +676,11 @@ export async function createWorkSlice(
       completedAt: "",
       artifactPath: `${projectPath}/.dbc/slices/browser-slice-${task.id}.json`,
     };
+    browserHarnessOverview = {
+      ...browserHarnessOverview,
+      slices: [slice, ...browserHarnessOverview.slices],
+    };
+    return slice;
   }
 
   const slice = await invoke<BackendWorkSlice>("create_work_slice", {
@@ -651,13 +703,25 @@ export async function createWorkSlice(
 }
 
 export async function approveWorkSlice(sliceId: string): Promise<WorkSlice> {
-  if (!isTauriRuntime()) throw new Error("WorkSlice approval requires the Tauri desktop runtime.");
+  if (!isTauriRuntime()) {
+    const slice = browserHarnessOverview.slices.find((item) => item.id === sliceId);
+    if (!slice) throw new Error(`Preview WorkSlice not found: ${sliceId}`);
+    const approved: WorkSlice = {
+      ...slice,
+      status: "approved",
+    };
+    browserHarnessOverview = {
+      ...browserHarnessOverview,
+      slices: browserHarnessOverview.slices.map((item) => (item.id === sliceId ? approved : item)),
+    };
+    return approved;
+  }
   return fromBackendWorkSlice(await invoke<BackendWorkSlice>("approve_work_slice", { sliceId }));
 }
 
 export async function startHarnessRun(projectId: string, projectPath: string, taskId: string, contractId: string, workSliceId: string): Promise<HarnessRun> {
   if (!isTauriRuntime()) {
-    return {
+    const run: HarnessRun = {
       id: `browser-harness-${Date.now()}`,
       projectId,
       projectPath,
@@ -673,6 +737,11 @@ export async function startHarnessRun(projectId: string, projectPath: string, ta
       compatibilityLoopRunId: "browser-loop",
       manifestPath: `${projectPath}/.dbc/harness-runs/browser-harness/manifest.json`,
     };
+    browserHarnessOverview = {
+      ...browserHarnessOverview,
+      runs: [run, ...browserHarnessOverview.runs],
+    };
+    return run;
   }
 
   const run = await invoke<BackendHarnessRun>("start_harness_run", {
@@ -688,17 +757,100 @@ export async function startHarnessRun(projectId: string, projectPath: string, ta
 }
 
 export async function advanceHarnessRun(harnessRunId: string): Promise<HarnessRun> {
-  if (!isTauriRuntime()) throw new Error("HarnessRun advance requires the Tauri desktop runtime.");
+  if (!isTauriRuntime()) {
+    const run = browserHarnessOverview.runs.find((item) => item.id === harnessRunId);
+    if (!run) throw new Error(`Preview HarnessRun not found: ${harnessRunId}`);
+    const stages: HarnessRun["status"][] = [
+      "slice_running",
+      "self_checked",
+      "reviewed",
+      "security_reviewed",
+      "evidence_ready",
+    ];
+    const currentIndex = Math.max(0, stages.indexOf(run.status));
+    const nextStatus = stages[Math.min(currentIndex + 1, stages.length - 1)];
+    const advanced: HarnessRun = {
+      ...run,
+      status: nextStatus,
+      currentStage: nextStatus,
+      completedAt: nextStatus === "evidence_ready" ? String(Date.now()) : "",
+    };
+    browserHarnessOverview = {
+      ...browserHarnessOverview,
+      runs: browserHarnessOverview.runs.map((item) => (item.id === harnessRunId ? advanced : item)),
+    };
+    return advanced;
+  }
   return fromBackendHarnessRun(await invoke<BackendHarnessRun>("advance_harness_run", { harnessRunId }));
 }
 
 export async function generateEvidencePack(harnessRunId: string): Promise<EvidencePack> {
-  if (!isTauriRuntime()) throw new Error("EvidencePack generation requires the Tauri desktop runtime.");
+  if (!isTauriRuntime()) {
+    const run = browserHarnessOverview.runs.find((item) => item.id === harnessRunId);
+    if (!run) throw new Error(`Preview HarnessRun not found: ${harnessRunId}`);
+    if (!["evidence_ready", "accepted", "rework"].includes(run.status)) {
+      throw new Error("Advance the preview run to evidence ready before generating its EvidencePack.");
+    }
+    const existing = browserHarnessOverview.evidencePacks.find((item) => item.harnessRunId === harnessRunId);
+    if (existing) return existing;
+    const pack: EvidencePack = {
+      id: `browser-pack-${Date.now()}`,
+      projectId: run.projectId,
+      projectPath: run.projectPath,
+      taskId: run.taskId,
+      contractId: run.contractId,
+      harnessRunId: run.id,
+      status: "ready_for_decision",
+      manifestPath: `${run.projectPath}/.dbc/evidence-packs/${run.id}/manifest.json`,
+      reportPath: `${run.projectPath}/.dbc/evidence-packs/${run.id}/report.html`,
+      createdAt: String(Date.now()),
+      finalizedAt: "",
+      finalDecision: "",
+      refs: {
+        scope: "passed",
+        build: "passed",
+        tests: "passed",
+        review: "passed",
+        security: "passed",
+      },
+    };
+    browserHarnessOverview = {
+      ...browserHarnessOverview,
+      evidencePacks: [pack, ...browserHarnessOverview.evidencePacks],
+    };
+    return pack;
+  }
   return fromBackendEvidencePack(await invoke<BackendEvidencePack>("generate_evidence_pack", { harnessRunId }));
 }
 
 export async function acceptOrReworkHarnessResult(harnessRunId: string, decision: "accepted" | "rework" | "rejected", note: string): Promise<HarnessRun> {
-  if (!isTauriRuntime()) throw new Error("Harness final decision requires the Tauri desktop runtime.");
+  if (!isTauriRuntime()) {
+    const run = browserHarnessOverview.runs.find((item) => item.id === harnessRunId);
+    if (!run) throw new Error(`Preview HarnessRun not found: ${harnessRunId}`);
+    const decided: HarnessRun = {
+      ...run,
+      status: decision,
+      currentStage: decision,
+      completedAt: String(Date.now()),
+      lastError: decision === "accepted" ? "" : note,
+    };
+    browserHarnessOverview = {
+      ...browserHarnessOverview,
+      runs: browserHarnessOverview.runs.map((item) => (item.id === harnessRunId ? decided : item)),
+      evidencePacks: browserHarnessOverview.evidencePacks.map((pack) =>
+        pack.harnessRunId === harnessRunId
+          ? {
+              ...pack,
+              status: "finalized",
+              finalDecision: decision,
+              finalizedAt: String(Date.now()),
+              refs: { ...pack.refs, decisionNote: note || "No additional note." },
+            }
+          : pack,
+      ),
+    };
+    return decided;
+  }
   return fromBackendHarnessRun(
     await invoke<BackendHarnessRun>("accept_or_rework_harness_result", {
       request: { harness_run_id: harnessRunId, decision, note },
@@ -707,7 +859,14 @@ export async function acceptOrReworkHarnessResult(harnessRunId: string, decision
 }
 
 export async function loadHarnessOverview(projectPath: string): Promise<HarnessOverview> {
-  if (!isTauriRuntime()) return { contracts: [], slices: [], runs: [], evidencePacks: [] };
+  if (!isTauriRuntime()) {
+    return {
+      contracts: browserHarnessOverview.contracts.filter((item) => item.projectPath === projectPath),
+      slices: browserHarnessOverview.slices.filter((item) => item.projectPath === projectPath),
+      runs: browserHarnessOverview.runs.filter((item) => item.projectPath === projectPath),
+      evidencePacks: browserHarnessOverview.evidencePacks.filter((item) => item.projectPath === projectPath),
+    };
+  }
   const overview = await invoke<BackendHarnessOverview>("load_harness_overview", { projectPath });
   return {
     contracts: (overview.contracts ?? []).map(fromBackendTaskContract),
