@@ -11,9 +11,6 @@ updates:
         update-types:
           - minor
           - patch
-    labels:
-      - dependencies
-
   - package-ecosystem: cargo
     directory: /src-tauri
     schedule:
@@ -25,9 +22,6 @@ updates:
         update-types:
           - minor
           - patch
-    labels:
-      - dependencies
-
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -39,5 +33,3 @@ updates:
         update-types:
           - minor
           - patch
-    labels:
-      - dependencies
