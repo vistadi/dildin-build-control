@@ -36,6 +36,11 @@ jobs:
       - name: Guided run smoke
         run: pnpm guided-run-smoke
 
+      - name: Verify a deterministic EvidencePack
+        run: |
+          pnpm controlled-smoke
+          pnpm dbc:verify -- --latest
+
   rust:
     name: Rust tests
     runs-on: ubuntu-latest

@@ -77,7 +77,8 @@ function buildEvidenceSummary(loopId) {
   const gates = acceptancePackage?.gates || {};
   const missingArtifacts = diagnostics.filter((item) => item.level === "error").length;
   const warnings = diagnostics.filter((item) => item.level === "warning").length;
-  const pendingApprovals = Number(approvalLedger?.pending || 0);
+  const relevantApprovals = approvalsForLoop(approvalLedger, loopId, taskId);
+  const pendingApprovals = relevantApprovals.filter((record) => record.status === "pending").length;
 
   return {
     version: 1,
@@ -94,6 +95,7 @@ function buildEvidenceSummary(loopId) {
     gitDiff,
     gitDiffStat,
     approvalLedger,
+    relevantApprovals,
     stepEvidence,
     diagnostics,
     health: {
@@ -175,7 +177,7 @@ function latestJsonIds(dir) {
 function markdown(bundle) {
   const health = bundle.health;
   const scopeGate = bundle.acceptancePackage?.scopeGate || bundle.acceptancePackage?.task?.scopeGate || {};
-  const pending = (bundle.approvalLedger?.records || []).filter((record) => record.status === "pending");
+  const pending = (bundle.relevantApprovals || []).filter((record) => record.status === "pending");
   return [
     `# Evidence Summary: ${bundle.loopId}`,
     "",
@@ -210,6 +212,30 @@ function markdown(bundle) {
     ...Object.entries(bundle.refs).map(([key, value]) => `- ${key}: ${value}`),
     "",
   ].join("\n");
+}
+
+function approvalsForLoop(ledger, loopId, taskId) {
+  const references = [loopId, taskId].filter(Boolean).map((value) => String(value).toLowerCase());
+  if (!references.length || !Array.isArray(ledger?.records)) return [];
+
+  return ledger.records.filter((record) => {
+    const searchable = [
+      record.id,
+      record.loopId,
+      record.loop_id,
+      record.taskId,
+      record.task_id,
+      record.action,
+      record.reason,
+      record.preview,
+      record.artifactPath,
+      record.artifact_path,
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .toLowerCase();
+    return references.some((reference) => searchable.includes(reference));
+  });
 }
 
 function diag(level, subject, detail) {

@@ -607,9 +607,18 @@ function collectGitEvidence() {
     diffStat: runGit(["diff", "--stat"]).trim(),
     changedFiles: runGit(["status", "--short"])
       .split("\n")
-      .map((line) => line.trim().slice(3).trim())
+      .map(parseGitStatusPath)
       .filter(Boolean),
   };
+}
+
+function parseGitStatusPath(line) {
+  if (!line || line.length < 4) return "";
+  const pathValue = line.slice(3).trim();
+  const renameSeparator = " -> ";
+  return pathValue.includes(renameSeparator)
+    ? pathValue.slice(pathValue.lastIndexOf(renameSeparator) + renameSeparator.length)
+    : pathValue;
 }
 
 function runGit(args) {
