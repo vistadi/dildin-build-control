@@ -6,6 +6,25 @@ The project follows [Semantic Versioning](https://semver.org/) while release sta
 
 ## [Unreleased]
 
+### Added
+
+- A deterministic, side-effect-free browser preview of the full Guided Run lifecycle.
+- EvidencePack verification via `dbc:verify`, enforced in CI and release checks.
+- A Homebrew Cask generator that requires real release checksums.
+- Positioning, demo, signing, and 30-day go-to-market playbooks.
+
+### Changed
+
+- The default experience now starts in a simplified Run flow with expert tools grouped under Advanced.
+- Evidence and final acceptance are presented as the primary product outcome.
+- Release automation is ready to consume Apple signing and notarization secrets without claiming unsigned artifacts are signed.
+
+### Fixed
+
+- Controlled-smoke scope evidence now preserves complete Git status paths.
+- Evidence summaries ignore unrelated pending approvals from other tasks and loops.
+- Final Guided Run decisions can no longer be accepted repeatedly.
+
 ### Planned
 
 - Signed and notarized macOS distribution.

@@ -4,19 +4,22 @@ This roadmap is intentionally operator-centered. DBC should become more capable 
 
 ## Now
 
-- Keep the Guided Run production path stable: TZ intake, TaskContract, WorkSlice, HarnessRun, EvidencePack, and final decision.
+- Keep the primary Run path stable: bounded task, approved scope, safe run, checks, EvidencePack, and final decision.
+- Keep the deterministic browser preview complete and explicit that it touches no project files, providers, or credentials.
 - Keep CI green for frontend build and Rust tests.
 - Keep screenshot-guide, production guide, testing guide, and design audit evidence current.
-- Improve onboarding around Quick Setup, provider profiles, mock loops, and `.dbc` recovery.
+- Measure whether a new evaluator can generate a first EvidencePack within ten minutes.
+- Improve onboarding around project import, Quick Setup, provider profiles, mock loops, and `.dbc` recovery.
 - Keep portable `.dbc` save/load behavior covered by round-trip and damaged-input regression tests.
 
 ## Next
 
 - Add smaller focused tests around command policy, scope gates, provider routing, and acceptance packages.
 - Add a compact demo video or GIF flow: Guided Run -> HarnessRun advance -> EvidencePack -> Acceptance Checklist.
-- Improve release packaging docs for macOS signing/notarization.
+- Configure and verify macOS signing/notarization secrets; publish a Homebrew Cask only after both architectures pass verification.
 - Add a provider adapter test harness with fixture prompts and expected structured reports.
 - Add regression checks for Guided Run empty states, final decision states, and Quick Setup provider readiness.
+- Extend the headless `dbc:verify` report with uploaded pull-request artifacts and clearer gate diagnostics.
 
 ## Later
 

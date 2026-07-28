@@ -2,34 +2,68 @@
 
 ## LinkedIn
 
-I am publishing Dildin Build Control, a local-first desktop control tower for AI-assisted software delivery.
+An AI coding agent can say “done.” That is not the same as proving the work is ready to merge.
 
-The core idea: agent work should be treated as an engineering loop, not a disappearing chat transcript.
+I am building Dildin Build Control (DBC), a local-first evidence and acceptance layer for AI-assisted software delivery.
 
-DBC gives each run a Guided Run path: TZ intake, TaskContract, WorkSlice, HarnessRun, provider routing, build/test evidence, review, security gates, EvidencePack, final Accept/Rework/Reject decision, and a manual git handoff. It supports mock loops for rehearsal and real CLI provider loops when the operator is ready.
+One bounded request becomes one EvidencePack containing approved scope, build/test evidence, review and security verdicts, unresolved risks, approvals, and the final Accept/Rework/Reject decision.
 
-The project is built with Tauri, React, TypeScript, Rust, SQLite, and portable `.dbc` workspace files.
+DBC does not replace Codex CLI, Claude Code, or their permissions. It gives teams one provider-neutral record for deciding whether agent work is actually acceptable.
+
+The safe interactive preview requires no provider credentials and touches no project files.
 
 What I am looking for:
 
-- feedback from people running CLI coding agents in real projects
-- examples of failure modes that need better gates
-- contributors interested in local-first agent tooling, safety boundaries, and auditability
+- engineering leads already reviewing agent-generated changes
+- agencies that need an acceptance record for customer work
+- real examples of scope expansion, missing test evidence, or unverifiable “done” claims
 
 Repository: <GitHub URL>
 
 ## X / Twitter
 
-I am open-sourcing Dildin Build Control: a local-first desktop control tower for AI coding loops.
+AI agent: “Done.”
 
-TZ -> TaskContract -> WorkSlice -> HarnessRun -> EvidencePack -> Accept/Rework/Reject -> manual git handoff.
+DBC: Show the approved scope, checks that actually ran, review/security verdicts, unresolved risks, and the human decision.
 
-Not one-click autonomy. Loop engineering.
+Evidence before merge. Safe interactive preview; no credentials required.
 
 Repo: <GitHub URL>
 
 ## Short Version
 
-Dildin Build Control is a Tauri desktop app for running AI coding agents with Guided Run, explicit task contracts, bounded work slices, provider routing, approval gates, EvidencePacks, security checks, final decisions, and manual git handoff.
+Dildin Build Control is a provider-neutral evidence and acceptance layer for AI-assisted software delivery. It turns one bounded task into an EvidencePack with scope, checks, review, security, approvals, risks, and a final human decision.
 
 Apache-2.0. Feedback welcome: <GitHub URL>
+
+## Proof Story 1 — Scope Expansion
+
+The prompt looked small: update one README sentence.
+
+The acceptance boundary was smaller: only `README.md` could change.
+
+The useful question was not “did the agent finish?” It was “can we prove every changed file stayed inside the approved scope?”
+
+DBC records the task contract, changed-file scope gate, checks, review, and final decision in one EvidencePack. A forbidden-file change keeps acceptance blocked even if the provider reports success.
+
+Try the deterministic safe preview: <GitHub URL>
+
+## Proof Story 2 — Missing Test Evidence
+
+“Tests pass” is a claim until the run identifies the command, result, and linked evidence.
+
+DBC keeps the result blocked when required build/test evidence is missing. The operator sees exactly which gate is incomplete before deciding Accept, Rework, or Reject.
+
+The goal is not more agent autonomy. It is a shorter, reviewable path from agent output to justified acceptance.
+
+Demo: <Demo URL>
+
+## Proof Story 3 — Cross-Provider Review
+
+Codex can implement. Claude can review. Local commands can run the checks.
+
+The merge decision should not require reconstructing three transcripts.
+
+DBC normalizes those results into one provider-neutral EvidencePack: scope, artifacts, build/test, review, security, approvals, risks, and the final human decision.
+
+Repository: <GitHub URL>
