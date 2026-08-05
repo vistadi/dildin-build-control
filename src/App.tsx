@@ -272,7 +272,10 @@ export function App() {
   }, [running, currentLoop]);
 
   const activeProject = state.projects.find((project) => project.id === state.activeProjectId) ?? state.projects[0];
-  const pendingApprovals = state.approvals.filter((approval) => approval.status === "pending");
+  const activeHarnessRun = currentHarnessRun(harnessOverview);
+  const pendingApprovals = state.approvals.filter(
+    (approval) => approval.status === "pending" && approvalMatchesRun(approval, activeHarnessRun),
+  );
   const totalCost = state.costs.reduce((sum, event) => sum + event.amount, 0);
 
   useEffect(() => {
@@ -2093,10 +2096,10 @@ export function App() {
         {view === "reports" && (
           <ReportsView
             state={state}
-            totalCost={totalCost}
             currentLoop={currentLoop}
             harnessOverview={harnessOverview}
             onDecideHarnessResult={decideHarnessResult}
+            onNavigate={setView}
           />
         )}
         {view === "settings" && (
@@ -3052,38 +3055,28 @@ function GuidedRunView({
   const [allowedPaths, setAllowedPaths] = useState("src\nsrc-tauri\nREADME.md\ndocs\n.dbc");
   const [outOfScope, setOutOfScope] = useState(".env\nnode_modules\nsrc-tauri/target\ndist");
   const [decisionNote, setDecisionNote] = useState("");
-  const latestRun = harnessOverview.runs[0];
-  const activeTask = latestRun
-    ? state.tasks.find((task) => task.id === latestRun.taskId)
-    : currentLoop
-      ? state.tasks.find((task) => task.id === currentLoop.taskId)
-      : undefined;
+  const [advancedTaskOpen, setAdvancedTaskOpen] = useState(false);
+  const latestRun = currentHarnessRun(harnessOverview);
+  const activeTask = latestRun ? state.tasks.find((task) => task.id === latestRun.taskId) : undefined;
   const latestContract = activeTask ? latestContractForTask(activeTask.id, harnessOverview.contracts) : undefined;
   const latestSlice = activeTask ? latestSliceForTask(activeTask.id, harnessOverview.slices) : undefined;
-  const latestPack = latestRun
-    ? harnessOverview.evidencePacks.find((pack) => pack.harnessRunId === latestRun.id) ?? harnessOverview.evidencePacks[0]
-    : harnessOverview.evidencePacks[0];
-  const pendingApprovals = state.approvals.filter((approval) => approval.status === "pending");
-  const allStepsPassed = state.loopSteps.length > 0 && state.loopSteps.every((step) => step.status === "passed");
-  const hasEvidenceLinks = state.loopSteps.some((step) => step.evidencePath || step.artifactPath);
-  const hasStructuredReview = state.loopSteps.some((step) => step.structuredReport);
+  const latestPack = evidencePackForRun(latestRun, harnessOverview.evidencePacks);
+  const scopedCurrentLoop = loopMatchesRun(currentLoop, latestRun) ? currentLoop : null;
+  const pendingApprovals = state.approvals.filter((approval) => approval.status === "pending" && approvalMatchesRun(approval, latestRun));
+  const currentSteps = latestRun ? (isTauriRuntime() ? scopedCurrentLoop?.steps ?? [] : state.loopSteps) : [];
+  const allStepsPassed = currentSteps.length > 0 && currentSteps.every((step) => step.status === "passed");
+  const hasEvidenceLinks = currentSteps.some((step) => step.evidencePath || step.artifactPath);
+  const hasStructuredReview = currentSteps.some((step) => step.structuredReport);
   const hasFinalDecision = Boolean(latestPack?.finalDecision);
   const readyForAccept = Boolean(latestRun && latestPack && !hasFinalDecision && allStepsPassed && pendingApprovals.length === 0);
   const activeRunCanAdvance = Boolean(latestRun && !["evidence_ready", "accepted", "rejected", "blocked", "shipped"].includes(latestRun.status));
   const activeRunCanPack = Boolean(latestRun && ["evidence_ready", "accepted", "rework"].includes(latestRun.status));
-  const completeness = activeTask
-    ? [
-        Boolean(activeTask),
-        Boolean(latestContract),
-        Boolean(latestSlice),
-        Boolean(latestRun),
-        allStepsPassed,
-        hasEvidenceLinks,
-        hasStructuredReview,
-        Boolean(latestPack),
-        pendingApprovals.length === 0,
-      ].filter(Boolean).length
-    : 0;
+  const hasDraftInput = Boolean(title.trim() || tz.trim());
+  const draftReady = Boolean(title.trim() && tz.trim());
+  const describeReady = Boolean(activeTask || draftReady);
+  const checksReady = Boolean(latestRun && allStepsPassed && hasEvidenceLinks && hasStructuredReview);
+  const decisionReady = Boolean(latestPack?.finalDecision);
+  const completeness = [describeReady, checksReady, decisionReady].filter(Boolean).length;
   const currentStage =
     !activeTask
       ? "paste_tz"
@@ -3098,6 +3091,18 @@ function GuidedRunView({
           : readyForAccept
             ? "decision_ready"
             : "review_evidence";
+  const currentStageLabel =
+    currentStage === "paste_tz"
+      ? "Describe change"
+      : currentStage === "ready_to_run"
+        ? "Ready to run"
+        : currentStage === "evidence_ready"
+          ? "Generate proof"
+          : currentStage === "decision_ready"
+            ? "Make decision"
+            : currentStage === "decided"
+              ? "Decided"
+              : "Running checks";
 
   function buildGuidedTask(): Task | null {
     if (!title.trim() || !tz.trim()) return null;
@@ -3152,36 +3157,14 @@ function GuidedRunView({
   }
 
   const wizardSteps = [
-    { label: "Task", done: Boolean(activeTask), detail: activeTask ? activeTask.title : "Describe the change" },
-    { label: "Scope", done: Boolean(latestContract), detail: latestContract?.status ?? "not bounded" },
-    { label: "Work", done: Boolean(latestSlice), detail: latestSlice?.status ?? "not prepared" },
-    { label: "Run", done: Boolean(latestRun), detail: latestRun?.status ?? "not started" },
-    { label: "Proof", done: Boolean(latestPack), detail: latestPack?.status ?? "not generated" },
-    { label: "Decision", done: Boolean(latestPack?.finalDecision), detail: latestPack?.finalDecision || "pending" },
+    { label: "Describe", done: describeReady, detail: activeTask?.title ?? (draftReady ? "Ready to start" : "One bounded change") },
+    { label: "Run checks", done: checksReady, detail: latestRun?.status ?? "Not started" },
+    { label: "Decide", done: decisionReady, detail: latestPack?.finalDecision || (latestPack ? "Evidence ready" : "Pending") },
   ];
 
   return (
     <section className="view-stack guided-run">
-      <Panel
-        title="Guided Run"
-        icon={ClipboardCheck}
-        action={
-          <div className="action-toolbar">
-            <button className="ghost-btn compact-btn" onClick={() => onNavigate("settings")}>
-              <KeyRound size={16} />
-              Setup
-            </button>
-            <button className="ghost-btn compact-btn" onClick={() => onNavigate("approvals")}>
-              <ShieldCheck size={16} />
-              Approvals
-            </button>
-            <button className="ghost-btn compact-btn" onClick={() => onNavigate("reports")}>
-              <FileText size={16} />
-              Reports
-            </button>
-          </div>
-        }
-      >
+      <Panel title="Guided Run" icon={ClipboardCheck}>
         {!isTauriRuntime() ? (
           <div className="runtime-notice" role="status">
             <ShieldCheck size={18} />
@@ -3211,8 +3194,8 @@ function GuidedRunView({
         />
         <DecisionStrip
           items={[
-            { label: "Proof readiness", value: `${completeness}/9`, tone: completeness >= 8 ? "ok" : completeness >= 4 ? "warning" : "failed" },
-            { label: "Current stage", value: displayValue(currentStage), tone: currentStage === "decision_ready" ? "ok" : "warning" },
+            { label: "Journey", value: `${completeness}/3`, tone: completeness === 3 ? "ok" : completeness ? "warning" : "failed" },
+            { label: "Current stage", value: currentStageLabel, tone: currentStage === "decision_ready" ? "ok" : "warning" },
             { label: "Pending approvals", value: String(pendingApprovals.length), tone: pendingApprovals.length ? "warning" : "ok" },
             { label: "Runtime", value: isTauriRuntime() ? "desktop" : "safe preview", tone: "ok" },
           ]}
@@ -3233,10 +3216,16 @@ function GuidedRunView({
           title="1. Describe the change"
           icon={FileText}
           action={
-            <button className="ghost-btn compact-btn" onClick={loadDemoTask}>
-              <Play size={15} />
-              Load demo task
-            </button>
+            <div className="action-toolbar">
+              <button className="ghost-btn compact-btn" onClick={loadDemoTask}>
+                <Play size={15} />
+                Load demo
+              </button>
+              <button className="primary-btn compact-btn" onClick={createAndRun} disabled={!draftReady}>
+                <Play size={15} />
+                Start safe run
+              </button>
+            </div>
           }
         >
           <div className="task-composer">
@@ -3250,32 +3239,36 @@ function GuidedRunView({
                 <textarea value={tz} onChange={(event) => setTz(event.target.value)} placeholder="Paste the task, context, constraints, and expected product result." />
               </label>
             </div>
-            <div className="composer-grid two-up">
-              <label>
-                Acceptance criteria
-                <textarea value={acceptance} onChange={(event) => setAcceptance(event.target.value)} />
-              </label>
-              <label>
-                Allowed paths
-                <textarea value={allowedPaths} onChange={(event) => setAllowedPaths(event.target.value)} />
-              </label>
-              <label>
-                Out of scope / forbidden paths
-                <textarea value={outOfScope} onChange={(event) => setOutOfScope(event.target.value)} />
-              </label>
-              <div className="guided-action-card">
-                <strong>One safe start</strong>
-                <p>DBC bounds the scope, creates the contract and work slice, then starts one deterministic run. No second start action is required.</p>
-                <button className="primary-btn" onClick={createAndRun} disabled={!title.trim() || !tz.trim()}>
-                  <Play size={16} />
-                  Create and start safe run
-                </button>
+            <button
+              className="disclosure-button"
+              type="button"
+              aria-expanded={advancedTaskOpen}
+              onClick={() => setAdvancedTaskOpen((open) => !open)}
+            >
+              <span>Scope and acceptance details</span>
+              <strong>{advancedTaskOpen ? "−" : "+"}</strong>
+            </button>
+            {advancedTaskOpen ? (
+              <div className="composer-grid two-up advanced-task-fields">
+                <label>
+                  Acceptance criteria
+                  <textarea value={acceptance} onChange={(event) => setAcceptance(event.target.value)} />
+                </label>
+                <label>
+                  Allowed paths
+                  <textarea value={allowedPaths} onChange={(event) => setAllowedPaths(event.target.value)} />
+                </label>
+                <label>
+                  Out of scope / forbidden paths
+                  <textarea value={outOfScope} onChange={(event) => setOutOfScope(event.target.value)} />
+                </label>
               </div>
-            </div>
+            ) : null}
+            <p className="helper-text">DBC creates the contract, bounds the scope, and starts one safe run from this form.</p>
           </div>
         </Panel>
 
-        <Panel title="2. Bounded scope" icon={ListChecks}>
+        <Panel title="Scope preview" icon={ListChecks}>
           {activeTask ? (
             <div className="contract-preview">
               <span className={`status-pill ${activeTask.status}`}>{displayValue(activeTask.status)}</span>
@@ -3302,18 +3295,35 @@ function GuidedRunView({
                 ) : null}
               </div>
             </div>
+          ) : hasDraftInput ? (
+            <div className="contract-preview draft-preview">
+              <span className={`status-pill ${draftReady ? "ok" : "warning"}`}>{draftReady ? "ready" : "incomplete"}</span>
+              <strong>{title.trim() || "Untitled change"}</strong>
+              <p>{tz.trim() || "Add the expected result before starting."}</p>
+              <div className="scope-preview-list">
+                <div>
+                  <span>Allowed</span>
+                  <strong>{lines(allowedPaths).join(", ") || "No paths set"}</strong>
+                </div>
+                <div>
+                  <span>Blocked</span>
+                  <strong>{lines(outOfScope).join(", ") || "No paths set"}</strong>
+                </div>
+              </div>
+              <p className="helper-text">This scope will be frozen into the TaskContract when you start.</p>
+            </div>
           ) : (
             <div className="empty-state">
               <span className="status-pill warning">waiting</span>
-              <strong>No active task yet</strong>
-              <p>Paste a TZ on the left. This is the first production step.</p>
+              <strong>Describe one change</strong>
+              <p>The approved and forbidden paths will appear here before the run starts.</p>
             </div>
           )}
         </Panel>
       </div>
 
       <div className="two-column guided-grid">
-        <Panel title="3. Run the checks" icon={RotateCcw}>
+        <Panel title="2. Run checks" icon={RotateCcw}>
           {latestRun ? (
             <div className="audit-list">
               <div className="audit-row">
@@ -3332,11 +3342,11 @@ function GuidedRunView({
                   Open loop console
                 </button>
               </div>
-              {currentLoop ? (
+              {scopedCurrentLoop ? (
                 <div className="audit-row">
-                  <span className={`status-pill ${statusClass(currentLoop.status)}`}>{displayValue(currentLoop.status)}</span>
-                  <strong>{currentLoop.taskTitle || currentLoop.taskId}</strong>
-                  <p>{currentLoop.reportMarkdownPath || currentLoop.manifestPath || "Loop report pending."}</p>
+                  <span className={`status-pill ${statusClass(scopedCurrentLoop.status)}`}>{displayValue(scopedCurrentLoop.status)}</span>
+                  <strong>{scopedCurrentLoop.taskTitle || scopedCurrentLoop.taskId}</strong>
+                  <p>{scopedCurrentLoop.reportMarkdownPath || scopedCurrentLoop.manifestPath || "Loop report pending."}</p>
                 </div>
               ) : null}
             </div>
@@ -3349,7 +3359,7 @@ function GuidedRunView({
           )}
         </Panel>
 
-        <Panel title="4. Proof & decision" icon={BadgeCheck}>
+        <Panel title="3. Decide from evidence" icon={BadgeCheck}>
           <div className="decision-box">
             <DecisionStrip
               items={[
@@ -4677,25 +4687,34 @@ function ApprovalsView({
   updateApproval: (id: string, status: ApprovalRequest["status"]) => void;
   onRefreshApprovalQueue: () => void;
 }) {
-  const harnessGates = buildHarnessApprovalGates(harnessOverview);
-  const pendingApprovals = approvals.filter((approval) => approval.status === "pending").length;
-  const approvalDecision = approvalQueue?.blockers.length
-    ? "Blocked"
-    : pendingApprovals
-      ? `${pendingApprovals} pending`
-      : approvalQueue
-        ? displayValue(approvalQueue.status)
-        : "Preview mode";
+  const activeRun = currentHarnessRun(harnessOverview);
+  const scopedOverview = overviewForRun(harnessOverview, activeRun);
+  const harnessGates = buildHarnessApprovalGates(scopedOverview);
+  const currentApprovals = approvals.filter((approval) => approvalMatchesRun(approval, activeRun));
+  const pendingLocal = currentApprovals.filter((approval) => approval.status === "pending");
+  const currentQueueItems = activeRun ? (approvalQueue?.items ?? []).filter((item) => valueMatchesRun(item, activeRun)) : [];
+  const requiredQueueItems = currentQueueItems.filter((item) => item.required && item.status !== "not_required");
+  const pendingQueueItems = requiredQueueItems.filter((item) => item.status === "pending" || item.status === "blocked");
+  const blockerCount = pendingQueueItems.filter((item) => item.status === "blocked").length;
+  const pendingCount = pendingLocal.length + pendingQueueItems.length;
+  const approvalStatus = !activeRun ? "waiting" : blockerCount ? "blocked" : pendingCount ? "waiting" : "ready";
+  const nextAction = !activeRun
+    ? "Start one bounded Run. Approvals will appear only when they are linked to it."
+    : blockerCount
+      ? "Resolve the blocked gate before this run can continue."
+      : pendingCount
+        ? `Review ${pendingCount} decision${pendingCount === 1 ? "" : "s"} linked to this run.`
+        : "No human decision is currently blocking this run.";
   return (
     <section className="view-stack">
       <OperatorHint
-        step="Step 3"
-        title="Approve only the gates you understand"
-        detail="Approvals are the human brake in DBC. Real provider execution and risky commands should remain blocked until an operator approves them."
-        status={approvalQueue?.blockers.length ? "blocked" : pendingApprovals ? "waiting" : "ready"}
+        step={activeRun ? `Current run · ${activeRun.id}` : "Approvals"}
+        title={!activeRun ? "No current run selected" : pendingCount ? "A human decision is required" : "No approvals block this run"}
+        detail="DBC shows only approvals linked to the current run. Provider setup gates and historical records stay in technical details."
+        status={approvalStatus}
       />
       <Panel
-        title="Approval Queue"
+        title="Decisions for this run"
         icon={ShieldCheck}
         action={
           <button className="ghost-btn" onClick={onRefreshApprovalQueue}>
@@ -4706,176 +4725,106 @@ function ApprovalsView({
       >
         <DecisionStrip
           items={[
-            { label: "Decision", value: approvalDecision, tone: approvalQueue?.blockers.length ? "failed" : pendingApprovals ? "warning" : "ok" },
-            { label: "Local pending", value: String(pendingApprovals), tone: pendingApprovals ? "warning" : "ok" },
-            { label: "Real provider", value: "Human approval required", tone: "warning" },
-            { label: "Queue", value: approvalQueue ? displayValue(approvalQueue.status) : "Preview mode" },
+            { label: "Run", value: activeRun?.taskId ?? "not started", tone: activeRun ? "ok" : "warning" },
+            { label: "Needed now", value: String(pendingCount), tone: blockerCount ? "failed" : pendingCount ? "warning" : "ok" },
+            { label: "Real execution", value: requiredQueueItems.length ? "approval required" : "not requested", tone: requiredQueueItems.length ? "warning" : "ok" },
+            { label: "Status", value: displayValue(approvalStatus), tone: blockerCount ? "failed" : pendingCount ? "warning" : "ok" },
           ]}
         />
-        {approvalQueue ? (
-          <div className="audit-list">
-            <div className="summary-grid doctor-summary">
-              <div>
-                <span>Status</span>
-                <strong>{displayValue(approvalQueue.status)}</strong>
-              </div>
-              <div>
-                <span>Required</span>
-                <strong>{approvalQueue.summary.required}</strong>
-              </div>
-              <div>
-                <span>Pending</span>
-                <strong>{approvalQueue.summary.pendingRequired}</strong>
-              </div>
-              <div>
-                <span>Approved</span>
-                <strong>{approvalQueue.summary.approved}</strong>
-              </div>
-              <div>
-                <span>Blocked</span>
-                <strong>{approvalQueue.summary.blocked}</strong>
-              </div>
-              <div>
-                <span>Warnings</span>
-                <strong>{approvalQueue.warnings.length}</strong>
-              </div>
-            </div>
-            <div className="audit-row">
-              <span className={`status-pill ${approvalQueue.blockers.length ? "failed" : approvalQueue.status === "ready" ? "ok" : "warning"}`}>
-                {displayValue(approvalQueue.status)}
-              </span>
-              <strong>Next action</strong>
-              <p>{approvalQueue.nextAction}</p>
-            </div>
-            {approvalQueue.items.map((item) => (
-              <article className="approval-card" key={item.id}>
-                <div className="approval-head">
-                  <div>
-                    <span>{`${item.kind} · ${item.id}`}</span>
-                    <strong>{item.title}</strong>
-                  </div>
-                  <RiskPill risk={item.risk} />
+        <div className="next-action-card">
+          <span className={`status-pill ${statusClass(approvalStatus)}`}>{displayValue(approvalStatus)}</span>
+          <div>
+            <strong>Next action</strong>
+            <p>{nextAction}</p>
+          </div>
+        </div>
+        {requiredQueueItems.length ? (
+          <div className="approval-steps">
+            {requiredQueueItems.map((item, index) => (
+              <article className="approval-step" key={item.id}>
+                <span>{index + 1}</span>
+                <div>
+                  <strong>{item.title}</strong>
+                  <p>{item.reason}</p>
+                  {item.nextAction ? <small>{item.nextAction}</small> : null}
                 </div>
-                <p>{item.reason}</p>
-                <div className="stack-row">
-                  <span>{item.required ? "required" : "not required"}</span>
-                  {item.provider ? <span>{item.provider}</span> : null}
-                  {item.surface ? <span>{item.surface}</span> : null}
-                  {item.sourceStatus ? <span>{displayValue(item.sourceStatus)}</span> : null}
-                </div>
-                {item.nextAction ? <pre>{item.nextAction}</pre> : null}
-                {item.evidence.length ? (
-                  <div className="stack-row">
-                    {item.evidence.slice(0, 3).map((entry) => (
-                      <span key={entry}>{entry}</span>
-                    ))}
-                  </div>
-                ) : null}
-                {item.decisionPath ? (
-                  <div className="stack-row">
-                    <span>{item.decisionPath}</span>
-                  </div>
-                ) : null}
-                <span className={`status-pill ${item.status === "blocked" ? "failed" : item.status === "approved" || item.status === "not_required" ? "ok" : "warning"}`}>
+                <span className={`status-pill ${item.status === "blocked" ? "failed" : item.status === "approved" ? "ok" : "warning"}`}>
                   {displayValue(item.status)}
                 </span>
               </article>
             ))}
           </div>
-        ) : (
-          <div className="audit-row empty-state">
-            <span className="status-pill warning">missing</span>
-            <strong>Approval Queue report</strong>
-            <p>Preview mode has no desktop approval report yet. Run pnpm approval-queue in the project root or start a safe run in the desktop app, then refresh this panel.</p>
-          </div>
-        )}
-      </Panel>
-
-      <Panel title="Harness Approval Gates" icon={ShieldCheck}>
-        <div className="gate-phase-grid">
-          {harnessGates.map((gate) => (
-            <GatePhase key={gate.id} gate={gate} />
-          ))}
-        </div>
-      </Panel>
-
-      <section className="approval-list">
-        {approvals.length ? approvals.map((approval) => (
-          <article className="approval-card" key={approval.id}>
+        ) : null}
+        {pendingLocal.map((approval) => (
+          <article className="approval-card decision-card" key={approval.id}>
             <div className="approval-head">
-            <div>
-              <span>{approval.kind ? `${approval.kind} · ${approval.id}` : approval.id}</span>
-              <strong>{approval.action}</strong>
+              <div>
+                <span>Human decision</span>
+                <strong>{approval.action}</strong>
+              </div>
+              <RiskPill risk={approval.risk} />
             </div>
-            <RiskPill risk={approval.risk} />
-          </div>
-          <p>{approval.reason}</p>
-          {approval.command ? <code>{approval.command}</code> : null}
-          <pre>{approval.preview}</pre>
-          <div className="stack-row">
-            {approval.requester ? <span>{approval.requester}</span> : null}
-            {approval.optional ? <span>optional</span> : null}
-            {approval.createdAt ? <span>{approval.createdAt}</span> : null}
-          </div>
-          {approval.artifactPath || approval.decisionPath ? (
-            <div className="stack-row">
-              {approval.artifactPath ? <span>{approval.artifactPath}</span> : null}
-              {approval.decisionPath ? <span>{approval.decisionPath}</span> : null}
+            <p>{approval.reason}</p>
+            {approval.command ? <code>{approval.command}</code> : null}
+            <div className="button-row">
+              <button className="primary-btn" onClick={() => updateApproval(approval.id, "approved")}>
+                <CheckCircle2 size={16} /> Approve
+              </button>
+              <button className="ghost-btn" onClick={() => updateApproval(approval.id, "changes_requested")}>
+                <AlertTriangle size={16} /> Request changes
+              </button>
+              <button className="danger-btn" onClick={() => updateApproval(approval.id, "rejected")}>
+                <XCircle size={16} /> Reject
+              </button>
             </div>
-          ) : null}
-          <div className="button-row">
-            <button className="primary-btn" onClick={() => updateApproval(approval.id, "approved")} disabled={approval.status !== "pending"}>
-              <CheckCircle2 size={16} />
-              Approve
-            </button>
-            <button className="ghost-btn" onClick={() => updateApproval(approval.id, "changes_requested")} disabled={approval.status !== "pending"}>
-              <AlertTriangle size={16} />
-              Request changes
-            </button>
-            <button className="danger-btn" onClick={() => updateApproval(approval.id, "rejected")} disabled={approval.status !== "pending"}>
-              <XCircle size={16} />
-              Reject
-            </button>
-          </div>
-          <span className={`status-pill ${approval.status}`}>{approval.status.replace("_", " ")}</span>
           </article>
-        )) : (
-          <div className="empty-state">
-            <span className="status-pill ok">clear</span>
-            <strong>No local pending approvals</strong>
-            <p>Start a safe run or switch to real provider flow to generate approval requests.</p>
+        ))}
+      </Panel>
+      <details className="advanced-disclosure">
+        <summary>Technical gate details</summary>
+        <div className="advanced-disclosure-body">
+          <div className="gate-phase-grid">
+            {harnessGates.map((gate) => <GatePhase key={gate.id} gate={gate} />)}
           </div>
-        )}
-      </section>
+          <p className="helper-text">Global queue: {approvalQueue ? displayValue(approvalQueue.status) : "not loaded"}. Hidden records are not linked to the current run.</p>
+        </div>
+      </details>
     </section>
   );
 }
 
 function ReportsView({
   state,
-  totalCost,
   currentLoop,
   harnessOverview,
   onDecideHarnessResult,
+  onNavigate,
 }: {
   state: AppState;
-  totalCost: number;
   currentLoop: LoopRunSnapshot | null;
   harnessOverview: HarnessOverview;
   onDecideHarnessResult: (runId: string, decision: "accepted" | "rework" | "rejected", note: string) => Promise<void> | void;
+  onNavigate: (view: View) => void;
 }) {
   const [decisionNote, setDecisionNote] = useState("");
   const [localDecision, setLocalDecision] = useState<"" | "accepted" | "rework" | "rejected">("");
-  const task = state.tasks[0];
-  const allStepsPassed = state.loopSteps.length > 0 && state.loopSteps.every((step) => step.status === "passed");
-  const pendingApprovals = state.approvals.filter((approval) => approval.status === "pending");
-  const hasArtifacts = state.loopSteps.some((step) => Boolean(step.artifactPath));
-  const hasEvidenceFiles = state.loopSteps.some((step) => Boolean(step.evidencePath));
-  const hasStructuredReports = state.loopSteps.some((step) => Boolean(step.structuredReport));
-  const hasTaskSpec = Boolean(task?.specPath && task.specChecksum);
+  const [reportCopied, setReportCopied] = useState(false);
+  const latestRun = currentHarnessRun(harnessOverview);
+  const task = latestRun ? state.tasks.find((item) => item.id === latestRun.taskId) : undefined;
+  const latestPack = evidencePackForRun(latestRun, harnessOverview.evidencePacks);
+  const latestContract = latestRun
+    ? harnessOverview.contracts.find((contract) => contract.id === latestRun.contractId && contract.taskId === latestRun.taskId)
+    : undefined;
+  const scopedLoop = loopMatchesRun(currentLoop, latestRun) ? currentLoop : null;
+  const currentSteps = latestRun ? (isTauriRuntime() ? scopedLoop?.steps ?? [] : state.loopSteps) : [];
+  const allStepsPassed = currentSteps.length > 0 && currentSteps.every((step) => step.status === "passed");
+  const pendingApprovals = state.approvals.filter((approval) => approval.status === "pending" && approvalMatchesRun(approval, latestRun));
+  const hasArtifacts = currentSteps.some((step) => Boolean(step.artifactPath));
+  const hasEvidenceFiles = currentSteps.some((step) => Boolean(step.evidencePath));
+  const hasStructuredReports = currentSteps.some((step) => Boolean(step.structuredReport));
+  const hasTaskSpec = Boolean((task?.specPath && task.specChecksum) || (latestContract?.artifactPath && latestContract.checksum));
   const hasMemoryFiles = state.memory.some((note) => Boolean(note.path && note.checksum));
-  const latestPack = harnessOverview.evidencePacks[0];
-  const latestRun = harnessOverview.runs[0];
+  const taskCost = task ? state.costs.filter((event) => event.taskId === task.id).reduce((sum, event) => sum + event.amount, 0) : 0;
   const evidenceReady = Boolean(latestPack && allStepsPassed && pendingApprovals.length === 0);
   const finalStatus = latestPack?.finalDecision || (evidenceReady ? "ready_for_decision" : "blocked");
   const canAccept = evidenceReady && !latestPack?.finalDecision;
@@ -4890,30 +4839,32 @@ function ReportsView({
   ].filter(Boolean).length;
   const acceptanceChecks = [
     { label: "Loop steps passed", ok: allStepsPassed, detail: allStepsPassed ? "All loop steps are green." : "Run or advance the Harness lifecycle until all required steps pass." },
-    { label: "Backend artifacts recorded", ok: hasArtifacts, detail: hasArtifacts ? "Step artifacts are linked." : "No backend artifact paths are present on loop steps." },
-    { label: "Evidence files recorded", ok: hasEvidenceFiles, detail: hasEvidenceFiles ? "Machine-readable evidence exists." : "Step evidence files are missing." },
-    { label: "Review/security reports", ok: hasStructuredReports, detail: hasStructuredReports ? "Structured reports are attached." : "Reviewer/security structured output is missing." },
+    { label: "Artifacts linked", ok: hasArtifacts, detail: hasArtifacts ? "Step artifacts belong to this run." : "This run has no artifact paths yet." },
+    { label: "Evidence recorded", ok: hasEvidenceFiles, detail: hasEvidenceFiles ? "Machine-readable evidence belongs to this run." : "This run has no evidence snapshots yet." },
+    { label: "Review and security", ok: hasStructuredReports, detail: hasStructuredReports ? "Structured verdicts are attached." : "Review or security verdicts are missing." },
     { label: "Task spec persisted", ok: hasTaskSpec, detail: hasTaskSpec ? "Task spec has a path and checksum." : "Save the task spec or create a TaskContract artifact." },
-    { label: "No pending approvals", ok: pendingApprovals.length === 0, detail: pendingApprovals.length === 0 ? "No human gate is waiting." : `${pendingApprovals.length} approval request(s) must be resolved.` },
-    { label: "Harness EvidencePack", ok: Boolean(latestPack), detail: latestPack ? latestPack.manifestPath : "Generate EvidencePack from an evidence-ready HarnessRun." },
+    { label: "No pending approvals", ok: pendingApprovals.length === 0, detail: pendingApprovals.length === 0 ? "No approval is linked to this run." : `${pendingApprovals.length} approval request(s) are linked to this run.` },
+    { label: "EvidencePack generated", ok: Boolean(latestPack), detail: latestPack ? latestPack.manifestPath : "Generate the proof package from this run." },
   ];
   const report = useMemo(() => {
+    if (!latestRun || !task) return "No current HarnessRun selected.";
     return [
       `# Acceptance Report: ${task?.title ?? "Untitled task"}`,
       "",
       `Task: ${task?.id ?? "TASK"}`,
       `Task status: ${task?.status ?? "draft"}`,
       `Task spec: ${hasTaskSpec ? `${task?.specPath}#${task?.specChecksum}` : "not persisted"}`,
-      `Loop manifest: ${currentLoop?.manifestPath ?? latestRun?.manifestPath ?? "not started"}`,
-      `Backend JSON report: ${currentLoop?.reportJsonPath ?? (!isTauriRuntime() && latestRun ? "not generated in safe preview" : "not started")}`,
-      `Backend Markdown report: ${currentLoop?.reportMarkdownPath ?? (!isTauriRuntime() && latestRun ? "not generated in safe preview" : "not started")}`,
-      `Git baseline: ${currentLoop?.gitBaselinePath ?? (!isTauriRuntime() && latestRun ? "not generated in safe preview" : "not started")}`,
-      `Commit proposal: ${currentLoop?.commitProposalPath ?? (!isTauriRuntime() && latestRun ? "not generated in safe preview" : "not started")}`,
-      `Security report: ${currentLoop?.securityReportPath ?? (!isTauriRuntime() && latestRun ? "represented by deterministic preview evidence" : "not started")}`,
+      `HarnessRun: ${latestRun.id}`,
+      `Loop manifest: ${scopedLoop?.manifestPath ?? latestRun.manifestPath}`,
+      `Backend JSON report: ${scopedLoop?.reportJsonPath ?? (!isTauriRuntime() ? "not generated in safe preview" : "not generated")}`,
+      `Backend Markdown report: ${scopedLoop?.reportMarkdownPath ?? (!isTauriRuntime() ? "not generated in safe preview" : "not generated")}`,
+      `Git baseline: ${scopedLoop?.gitBaselinePath ?? (!isTauriRuntime() ? "not generated in safe preview" : "not generated")}`,
+      `Commit proposal: ${scopedLoop?.commitProposalPath ?? (!isTauriRuntime() ? "not generated in safe preview" : "not generated")}`,
+      `Security report: ${scopedLoop?.securityReportPath ?? (!isTauriRuntime() ? "represented by deterministic preview evidence" : "not generated")}`,
       `Harness EvidencePack: ${latestPack?.manifestPath ?? "not generated"}`,
       `Harness final decision: ${latestPack?.finalDecision || "pending"}`,
       `Final status: ${finalStatus}`,
-      `Cost: $${(isTauriRuntime() ? totalCost : 0).toFixed(2)} estimated${isTauriRuntime() ? "" : " (safe preview)"}`,
+      `Cost: $${(isTauriRuntime() ? taskCost : 0).toFixed(2)}${isTauriRuntime() ? " for this task" : " safe preview"}`,
       `Evidence gate: ${allStepsPassed ? "all loop steps passed" : "loop has incomplete or failed steps"}`,
       `Artifact gate: ${hasArtifacts ? "backend artifacts recorded" : "no backend artifacts recorded yet"}`,
       `Evidence file gate: ${hasEvidenceFiles ? "machine-readable evidence recorded" : "no evidence snapshot recorded yet"}`,
@@ -4923,27 +4874,23 @@ function ReportsView({
       `Approval gate: ${pendingApprovals.length === 0 ? "no pending approvals" : `${pendingApprovals.length} pending approval(s)`}`,
       "",
       "## Evidence",
-      ...state.loopSteps.map((step) => `- ${step.state}: ${step.status} - ${step.evidence}${step.evidencePath ? ` (${step.evidencePath})` : ""}`),
+      ...currentSteps.map((step) => `- ${step.state}: ${step.status} - ${step.evidence}${step.evidencePath ? ` (${step.evidencePath})` : ""}`),
       "",
       "## Backend Acceptance Package",
-      currentLoop
-        ? `- Manifest: ${currentLoop.manifestPath}`
-        : latestRun
-          ? `- Harness manifest: ${latestRun.manifestPath}`
-          : "- Manifest: not started",
-      currentLoop ? `- JSON: ${currentLoop.reportJsonPath}` : `- JSON: ${latestRun && !isTauriRuntime() ? "not generated in safe preview" : "not started"}`,
-      currentLoop ? `- Markdown: ${currentLoop.reportMarkdownPath}` : `- Markdown: ${latestRun && !isTauriRuntime() ? "not generated in safe preview" : "not started"}`,
-      currentLoop ? `- Git baseline: ${currentLoop.gitBaselinePath}` : `- Git baseline: ${latestRun && !isTauriRuntime() ? "not generated in safe preview" : "not started"}`,
-      currentLoop ? `- Commit proposal: ${currentLoop.commitProposalPath}` : `- Commit proposal: ${latestRun && !isTauriRuntime() ? "not generated in safe preview" : "not started"}`,
-      currentLoop ? `- Security: ${currentLoop.securityReportPath}` : `- Security: ${latestRun && !isTauriRuntime() ? "represented by deterministic preview evidence" : "not started"}`,
+      `- Harness manifest: ${latestRun.manifestPath}`,
+      `- JSON: ${scopedLoop?.reportJsonPath || "not generated"}`,
+      `- Markdown: ${scopedLoop?.reportMarkdownPath || "not generated"}`,
+      `- Git baseline: ${scopedLoop?.gitBaselinePath || "not generated"}`,
+      `- Commit proposal: ${scopedLoop?.commitProposalPath || "not generated"}`,
+      `- Security: ${scopedLoop?.securityReportPath || (!isTauriRuntime() ? "represented by deterministic preview evidence" : "not generated")}`,
       "",
       "## Harness Evidence Packs",
-      ...(harnessOverview.evidencePacks.length
-        ? harnessOverview.evidencePacks.map((pack) => `- ${pack.id}: ${pack.status}; manifest ${pack.manifestPath}; report ${pack.reportPath}; decision ${pack.finalDecision || "pending"}`)
-        : ["- No Harness EvidencePack generated."]),
+      ...(latestPack
+        ? [`- ${latestPack.id}: ${latestPack.status}; manifest ${latestPack.manifestPath}; report ${latestPack.reportPath}; decision ${latestPack.finalDecision || "pending"}`]
+        : ["- No EvidencePack generated for this run."]),
       "",
       "## Structured Reports",
-      ...state.loopSteps
+      ...currentSteps
         .filter((step) => step.structuredReport)
         .map((step) => {
           const report = step.structuredReport;
@@ -4956,12 +4903,12 @@ function ReportsView({
         : ["- No project memory notes recorded."]),
       "",
       "## Backend Artifacts",
-      ...state.loopSteps
+      ...currentSteps
         .filter((step) => step.artifactPath)
         .map((step) => `- ${step.state}: ${step.artifactPath}`),
       "",
       "## Evidence Files",
-      ...state.loopSteps
+      ...currentSteps
         .filter((step) => step.evidencePath)
         .map((step) => `- ${step.state}: ${step.evidencePath}`),
       "",
@@ -4970,7 +4917,7 @@ function ReportsView({
         ? pendingApprovals.map((approval) => `- Pending approval: ${approval.action}`)
         : ["- No unresolved approval risks recorded."]),
     ].join("\n");
-  }, [allStepsPassed, currentLoop, finalStatus, harnessOverview.evidencePacks, hasArtifacts, hasEvidenceFiles, hasMemoryFiles, hasStructuredReports, hasTaskSpec, latestRun, pendingApprovals, state.loopSteps, state.memory, task, totalCost]);
+  }, [allStepsPassed, currentSteps, finalStatus, hasArtifacts, hasEvidenceFiles, hasMemoryFiles, hasStructuredReports, hasTaskSpec, latestPack, latestRun, pendingApprovals, scopedLoop, state.memory, task, taskCost]);
 
   async function decide(decision: "accepted" | "rework" | "rejected") {
     setLocalDecision(decision);
@@ -4979,10 +4926,40 @@ function ReportsView({
     }
   }
 
+  async function copyReport() {
+    await navigator.clipboard.writeText(report);
+    setReportCopied(true);
+    window.setTimeout(() => setReportCopied(false), 1600);
+  }
+
+  if (!latestRun || !task) {
+    return (
+      <section className="view-stack">
+        <OperatorHint
+          step="Evidence"
+          title="No current run selected"
+          detail="Evidence appears only after a bounded Run starts. Historical smoke reports and unrelated costs stay out of this decision surface."
+          status="waiting"
+        />
+        <Panel title="Start with one bounded change" icon={ClipboardCheck}>
+          <div className="empty-state evidence-empty-state">
+            <span className="status-pill warning">not started</span>
+            <strong>No EvidencePack for the current journey</strong>
+            <p>Start a safe run, complete its checks, and generate the proof package. DBC will keep every result scoped to that run.</p>
+            <button className="primary-btn" onClick={() => onNavigate("guided")}>
+              <Play size={16} />
+              Open Run
+            </button>
+          </div>
+        </Panel>
+      </section>
+    );
+  }
+
   return (
     <section className="view-stack">
       <OperatorHint
-        step="Step 4"
+        step={`Current run · ${latestRun.id}`}
         title="Decide from evidence, not vibes"
         detail="Reports should answer whether the work can be accepted, needs rework, or must be rejected. Missing evidence keeps the result blocked."
         status={finalStatus === "accepted" ? "accepted" : canAccept ? "ready" : "blocked"}
@@ -5030,6 +5007,34 @@ function ReportsView({
           </p>
         </div>
       </Panel>
+      <Panel title="Decision Summary" icon={FileText}>
+        <div className="evidence-report-header">
+          <div>
+            <span className="eyebrow">{task.id}</span>
+            <h3>{task.title}</h3>
+            <p>{task.brief}</p>
+          </div>
+          <span className={`status-pill ${statusClass(finalStatus)}`}>{displayValue(finalStatus)}</span>
+        </div>
+        <div className="evidence-summary-grid">
+          <div>
+            <span>Approved scope</span>
+            <strong>{latestContract?.allowedPaths.join(", ") || task.allowedPaths.join(", ") || "Not recorded"}</strong>
+          </div>
+          <div>
+            <span>Checks</span>
+            <strong>{currentSteps.filter((step) => step.status === "passed").length}/{currentSteps.length} passed</strong>
+          </div>
+          <div>
+            <span>Review</span>
+            <strong>{hasStructuredReports ? "Recorded" : "Missing"}</strong>
+          </div>
+          <div>
+            <span>Task cost</span>
+            <strong>${(isTauriRuntime() ? taskCost : 0).toFixed(2)}</strong>
+          </div>
+        </div>
+      </Panel>
       <Panel title="Acceptance Checklist" icon={ListChecks}>
         <div className="acceptance-checklist">
           {acceptanceChecks.map((check) => (
@@ -5045,18 +5050,16 @@ function ReportsView({
       </Panel>
       <Panel title="Evidence Packs" icon={ClipboardCheck}>
         <div className="audit-list">
-          {harnessOverview.evidencePacks.length ? (
-            harnessOverview.evidencePacks.map((pack) => (
-              <div className="audit-row" key={pack.id}>
-                <span className={`status-pill ${pack.finalDecision === "accepted" ? "ok" : pack.status === "finalized" ? "warning" : "ok"}`}>
-                  {displayValue(pack.status)}
+          {latestPack ? (
+              <div className="audit-row" key={latestPack.id}>
+                <span className={`status-pill ${latestPack.finalDecision === "accepted" ? "ok" : latestPack.status === "finalized" ? "warning" : "ok"}`}>
+                  {displayValue(latestPack.status)}
                 </span>
-                <strong>{pack.id}</strong>
-                <p>Decision: {pack.finalDecision || "pending"}</p>
-                <code>{pack.manifestPath}</code>
-                <code>{pack.reportPath}</code>
+                <strong>{latestPack.id}</strong>
+                <p>Decision: {latestPack.finalDecision || "pending"}</p>
+                <code>{latestPack.manifestPath}</code>
+                <code>{latestPack.reportPath}</code>
               </div>
-            ))
           ) : (
             <div className="empty-state">
               <span className="status-pill warning">not ready</span>
@@ -5066,9 +5069,18 @@ function ReportsView({
           )}
         </div>
       </Panel>
-      <Panel title="Final Acceptance Report" icon={FileText}>
-        <textarea className="report-box" readOnly value={report} />
-      </Panel>
+      <details className="advanced-disclosure report-disclosure">
+        <summary>Raw report and artifact paths</summary>
+        <div className="advanced-disclosure-body">
+          <div className="button-row">
+            <button className="ghost-btn" onClick={copyReport}>
+              <ClipboardCheck size={16} />
+              {reportCopied ? "Copied" : "Copy report"}
+            </button>
+          </div>
+          <pre className="report-box">{report}</pre>
+        </div>
+      </details>
     </section>
   );
 }
@@ -5392,7 +5404,8 @@ function SettingsView({
   const claudeProvider = state.providers.find((provider) => provider.name.toLowerCase().includes("claude"));
   const localRunner = state.providers.find((provider) => provider.type === "local_runner");
   const realProviders = state.providers.filter((provider) => provider.type === "cli" && provider.runMode === "real");
-  const readyProviders = state.providers.filter((provider) => provider.enabled && provider.health === "ok");
+  const mockProvider = state.providers.find((provider) => provider.type === "mock" && provider.enabled);
+  const safeMockReady = Boolean(mockProvider && localRunner?.enabled && localRunner.health === "ok");
 
   return (
     <section className="view-stack">
@@ -5413,23 +5426,25 @@ function SettingsView({
         }
       >
         <OperatorHint
-          step="Settings baseline"
-          title={readyProviders.length ? "Providers are ready enough for guided runs" : "Check CLI paths before real execution"}
-          detail="Use mock mode for product loops, then switch only the approved micro-task to real provider mode after CLI discovery and contract checks pass."
-          status={readyProviders.length ? "ready" : "waiting"}
+          step="Current execution mode"
+          title={safeMockReady ? "Safe mock is ready" : "Finish local setup"}
+          detail={safeMockReady
+            ? "You can run the complete evidence journey without spending provider quota. Real execution remains a separate approved action."
+            : "Enable the deterministic mock provider and local runner before starting the first guided run."}
+          status={safeMockReady ? "ready" : "waiting"}
         />
         <DecisionStrip
           items={[
-            { label: "Codex", value: codexProvider ? displayValue(codexProvider.health) : "missing", tone: codexProvider?.health === "ok" ? "ok" : "warning" },
-            { label: "Claude", value: claudeProvider ? displayValue(claudeProvider.health) : "missing", tone: claudeProvider?.health === "ok" ? "ok" : "warning" },
-            { label: "Local runner", value: localRunner ? displayValue(localRunner.health) : "missing", tone: localRunner ? "ok" : "warning" },
-            { label: "Real providers", value: String(realProviders.length), tone: realProviders.length ? "warning" : "ok" },
+            { label: "Mode", value: safeMockReady ? "safe mock" : "not ready", tone: safeMockReady ? "ok" : "warning" },
+            { label: "Codex detected", value: codexProvider?.health === "ok" ? "yes" : "no", tone: codexProvider?.health === "ok" ? "ok" : "warning" },
+            { label: "Claude detected", value: claudeProvider?.health === "ok" ? "yes" : "no", tone: claudeProvider?.health === "ok" ? "ok" : "warning" },
+            { label: "Real execution", value: realProviders.length ? "enabled" : "off (safe)", tone: realProviders.length ? "warning" : "ok" },
           ]}
         />
         <div className="quick-setup-grid">
           <div>
-            <strong>Recommended user path</strong>
-            <p>Start with Safe mock, save setup, create a task, then use Save and start safe run.</p>
+            <strong>Next action</strong>
+            <p>{safeMockReady ? "Return to Run and start one bounded change." : "Apply Safe mock, then save this setup."}</p>
           </div>
           <div>
             <strong>Real provider rule</strong>
@@ -5453,14 +5468,6 @@ function SettingsView({
               <FileText size={16} />
               Load config
             </button>
-            <button className="warning-btn compact-btn" onClick={() => switchProviderProfile("real-micro")} disabled={!activeProject}>
-              <Play size={16} />
-              Real micro
-            </button>
-            <button className="ghost-btn compact-btn" onClick={() => switchProviderProfile("mock")} disabled={!activeProject}>
-              <RotateCcw size={16} />
-              Mock mode
-            </button>
           </div>
         </div>
         {contractDiagnostics.length ? (
@@ -5477,6 +5484,24 @@ function SettingsView({
           </div>
         ) : null}
       </Panel>
+
+      <details className="advanced-disclosure settings-advanced">
+        <summary>Advanced provider and policy settings</summary>
+        <div className="advanced-disclosure-body view-stack">
+          <div className="advanced-mode-actions">
+            <div>
+              <strong>Execution profiles</strong>
+              <p>Switch to real execution only for an approved micro-task.</p>
+            </div>
+            <div className="button-row">
+              <button className="ghost-btn" onClick={() => switchProviderProfile("mock")} disabled={!activeProject}>
+                <RotateCcw size={16} /> Safe mock
+              </button>
+              <button className="warning-btn" onClick={() => switchProviderProfile("real-micro")} disabled={!activeProject}>
+                <Play size={16} /> Real micro
+              </button>
+            </div>
+          </div>
 
       <Panel title="Provider Routing" icon={GitBranch}>
         <div className="audit-list">
@@ -5779,6 +5804,8 @@ function SettingsView({
           </div>
         </Panel>
       </section>
+        </div>
+      </details>
     </section>
   );
 }
@@ -5886,6 +5913,49 @@ function latestSliceForTask(taskId: string, slices: HarnessOverview["slices"], s
   return slices
     .filter((slice) => slice.taskId === taskId && (!statuses || statuses.includes(slice.status)))
     .sort((left, right) => Number(right.createdAt) - Number(left.createdAt))[0];
+}
+
+function currentHarnessRun(overview: HarnessOverview) {
+  return [...overview.runs].sort((left, right) => Number(right.createdAt) - Number(left.createdAt))[0];
+}
+
+function evidencePackForRun(run: HarnessRun | undefined, packs: HarnessOverview["evidencePacks"]) {
+  if (!run) return undefined;
+  return packs
+    .filter((pack) => pack.harnessRunId === run.id)
+    .sort((left, right) => Number(right.createdAt) - Number(left.createdAt))[0];
+}
+
+function overviewForRun(overview: HarnessOverview, run: HarnessRun | undefined): HarnessOverview {
+  if (!run) return { contracts: [], slices: [], runs: [], evidencePacks: [] };
+  return {
+    contracts: overview.contracts.filter((contract) => contract.taskId === run.taskId && contract.id === run.contractId),
+    slices: overview.slices.filter((slice) => slice.taskId === run.taskId && slice.id === run.currentSliceId),
+    runs: [run],
+    evidencePacks: overview.evidencePacks.filter((pack) => pack.harnessRunId === run.id),
+  };
+}
+
+function approvalMatchesRun(approval: ApprovalRequest, run: HarnessRun | undefined) {
+  if (!run) return false;
+  if (approval.loopId && approval.loopId === run.compatibilityLoopRunId) return true;
+  const references = [run.id, run.taskId, run.compatibilityLoopRunId].filter(Boolean);
+  const searchable = [approval.id, approval.action, approval.reason, approval.preview, approval.artifactPath]
+    .filter(Boolean)
+    .join("\n");
+  return references.some((reference) => searchable.includes(reference));
+}
+
+function valueMatchesRun(value: unknown, run: HarnessRun | undefined) {
+  if (!run) return false;
+  const references = [run.id, run.taskId, run.compatibilityLoopRunId].filter(Boolean);
+  const searchable = JSON.stringify(value);
+  return references.some((reference) => searchable.includes(reference));
+}
+
+function loopMatchesRun(loop: LoopRunSnapshot | null, run: HarnessRun | undefined) {
+  if (!loop || !run) return false;
+  return loop.id === run.compatibilityLoopRunId && loop.taskId === run.taskId;
 }
 
 function buildHarnessApprovalGates(overview: HarnessOverview) {

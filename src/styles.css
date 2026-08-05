@@ -290,6 +290,16 @@ button {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.48;
+  filter: grayscale(0.45);
+}
+
+button:focus-visible,
+summary:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 3px solid rgba(40, 98, 173, 0.35);
+  outline-offset: 2px;
 }
 
 .view-stack {
@@ -502,7 +512,7 @@ button:disabled {
 
 .guided-stepper {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -601,6 +611,189 @@ button:disabled {
 .contract-preview strong {
   overflow-wrap: anywhere;
   font-size: 16px;
+}
+
+.disclosure-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f6f8f8;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.disclosure-button strong {
+  color: var(--brand);
+  font-size: 20px;
+}
+
+.advanced-task-fields {
+  padding-top: 2px;
+}
+
+.draft-preview {
+  border-color: #c9dbdf;
+  background: #f8fbfb;
+}
+
+.scope-preview-list {
+  display: grid;
+  gap: 8px;
+}
+
+.scope-preview-list > div {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.scope-preview-list span,
+.evidence-summary-grid span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.scope-preview-list strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.advanced-disclosure {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.advanced-disclosure > summary {
+  min-height: 48px;
+  padding: 14px 16px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.advanced-disclosure[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.advanced-disclosure-body {
+  padding: 16px;
+}
+
+.next-action-card,
+.advanced-mode-actions,
+.evidence-report-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fbfb;
+}
+
+.next-action-card p,
+.advanced-mode-actions p,
+.evidence-report-header p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.approval-steps {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.approval-step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfc;
+}
+
+.approval-step > span:first-child {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: #e7f2f1;
+  color: var(--brand);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.approval-step p,
+.approval-step small {
+  display: block;
+  margin: 4px 0 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.decision-card {
+  margin-top: 12px;
+}
+
+.evidence-empty-state {
+  justify-items: start;
+  min-height: 220px;
+  align-content: center;
+}
+
+.evidence-report-header h3 {
+  margin: 3px 0 0;
+  font-size: 20px;
+}
+
+.evidence-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.evidence-summary-grid > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f6f8f8;
+}
+
+.evidence-summary-grid strong {
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.report-disclosure .report-box {
+  overflow: auto;
+  max-height: 520px;
+  margin: 12px 0 0;
+  white-space: pre-wrap;
+  resize: none;
 }
 
 .acceptance-checklist {
@@ -1744,6 +1937,7 @@ pre {
   .workflow-steps,
   .quick-setup-grid,
   .guided-stepper,
+  .evidence-summary-grid,
   .acceptance-checklist,
   .composer-grid.meta-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1808,6 +2002,9 @@ pre {
   .workspace-header,
   .approval-head,
   .operator-hint,
+  .next-action-card,
+  .advanced-mode-actions,
+  .evidence-report-header,
   .composer-footer,
   .task-section-head {
     align-items: stretch;
@@ -1863,6 +2060,7 @@ pre {
   .composer-grid.two-up,
   .composer-grid.meta-grid,
   .evidence-summary,
+  .evidence-summary-grid,
   .evidence-grid,
   .evidence-row {
     grid-template-columns: 1fr;
@@ -1870,5 +2068,14 @@ pre {
 
   .decision-box .decision-strip {
     grid-template-columns: 1fr;
+  }
+
+  .approval-step {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .approval-step > .status-pill {
+    grid-column: 2;
+    justify-self: start;
   }
 }

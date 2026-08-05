@@ -40,20 +40,26 @@ const builtCss = cssAsset ? readFileSync(cssAsset, "utf8") : "";
 
 check("nav guided view", app.includes('{ id: "guided", label: "Run"'), "The primary Run entry is present in the main navigation.");
 check("guided component", app.includes("function GuidedRunView("), "GuidedRunView component exists.");
-check("guided start button", app.includes("Create and start safe run"), "Guided Run has the primary safe-start action.");
+check("guided start button", app.includes("Start safe run"), "Guided Run has the primary safe-start action above the fold.");
 check("preview lifecycle", bridge.includes("browserHarnessOverview") && bridge.includes("ready_for_decision"), "Browser preview persists a complete safe Harness lifecycle.");
 check("preview safety copy", app.includes("No files or providers are touched"), "Browser preview clearly states its safety boundary.");
 check("advanced navigation", app.includes("advancedNavOpen") && app.includes("Advanced"), "Expert consoles are grouped under Advanced navigation.");
 check("advance action", app.includes("Advance checks"), "Guided Run exposes the safe check advance action.");
-check("evidence action", app.includes("Generate EvidencePack"), "Guided Run exposes EvidencePack generation.");
+check("evidence action", app.includes("Generate proof package"), "Guided Run exposes EvidencePack generation.");
+check("run context isolation", app.includes("evidencePackForRun") && app.includes("approvalMatchesRun") && app.includes("loopMatchesRun"), "Evidence, approvals, and loop artifacts are scoped to one HarnessRun.");
+check("evidence empty state", app.includes("No current run selected") && app.includes("Historical smoke reports and unrelated costs stay out"), "Evidence does not render stale reports without a current run.");
+check("three-stage onboarding", app.includes('label: "Describe"') && app.includes('label: "Run checks"') && app.includes('label: "Decide"'), "The primary journey uses three user-facing stages.");
+check("approval decision surface", app.includes("Decisions for this run") && app.includes("Hidden records are not linked to the current run"), "Approvals hide unrelated global records from the primary surface.");
+check("settings advanced disclosure", app.includes("Advanced provider and policy settings"), "Provider contracts and policy diagnostics are grouped under Advanced.");
+check("read-only report viewer", app.includes("Raw report and artifact paths") && app.includes('<pre className="report-box">'), "Raw evidence is rendered as read-only output rather than an editable-looking textarea.");
 check("decision actions", ["Accept", "Request rework", "Reject"].every((text) => app.includes(text)), "Final decision actions exist.");
 check("reports checklist", app.includes('Panel title="Acceptance Checklist"'), "Reports include an acceptance checklist.");
 check("accept disabled copy", app.includes("Accept stays disabled until"), "Reports explain why Accept is blocked.");
 check("settings quick setup", app.includes('title="Quick Setup"'), "Settings have a simplified Quick Setup surface.");
-check("guided styles", [".guided-stepper", ".guided-action-card", ".contract-preview"].every((text) => styles.includes(text)), "Guided Run CSS is present.");
+check("guided styles", [".guided-stepper", ".disclosure-button", ".contract-preview"].every((text) => styles.includes(text)), "Guided Run CSS is present.");
 check("acceptance styles", styles.includes(".acceptance-checklist"), "Acceptance Checklist CSS is present.");
 check("package script registered", pkg.scripts?.["guided-run-smoke"] === "node scripts/guided-run-smoke.mjs", "package.json exposes pnpm guided-run-smoke.");
-check("dist js built", builtJs.includes("Safe interactive preview") && builtJs.includes("Create and start safe run"), "Production JS bundle contains the new guided onboarding strings.");
+check("dist js built", builtJs.includes("Safe interactive preview") && builtJs.includes("Start safe run") && builtJs.includes("No current run selected"), "Production JS bundle contains the new guided onboarding and context-isolation strings.");
 check("dist css built", builtCss.includes("guided-stepper") && builtCss.includes("acceptance-checklist"), "Production CSS bundle contains Guided Run styles.");
 
 for (const rel of [
