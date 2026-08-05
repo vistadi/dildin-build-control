@@ -109,3 +109,34 @@ Release workflow, signing guide, Homebrew generator, roadmap.
 
 Unsigned alpha behavior remains valid when secrets are absent. Homebrew publication
 waits for real release checksums.
+
+## 2026-08-05 — Bind primary operator state to one HarnessRun
+
+Status: accepted
+
+### Context
+
+The primary screens could combine the newest harness record with legacy controlled-smoke
+steps, approvals, costs, or reports. A visually plausible screen could therefore describe
+more than one task at once.
+
+### Decision
+
+Resolve Run, Approvals, Evidence, and their navigation badges from one current
+HarnessRun. Show an explicit empty state when no run exists, and keep unrelated or
+historical diagnostics out of the primary operator surface.
+
+### Rationale
+
+Evidence is trustworthy only when every displayed gate, artifact, approval, cost, and
+human decision has the same task/run identity.
+
+### Affected modules
+
+`src/App.tsx`, Guided Run smoke coverage, operator-facing copy.
+
+### Consequences
+
+Legacy reports remain available through specialist diagnostics but cannot silently
+populate the current acceptance decision. New primary-screen data must carry enough
+task/run identity to pass the same scoping rule.
