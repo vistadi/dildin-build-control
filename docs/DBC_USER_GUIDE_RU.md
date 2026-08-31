@@ -2,7 +2,9 @@
 
 Этот документ описывает практический порядок работы с DBC v0.2 Harness Core Foundation.
 
-DBC сейчас лучше воспринимать как local-first control tower:
+DBC сейчас лучше воспринимать как local-first слой контроля и доказательств для работы
+с ИИ-агентами. Диби, бордер-колли DBC, помогает пройти основной безопасный путь, но не
+заменяет явные предупреждения и решения человека:
 
 ```text
 Task -> Contract -> Approval -> WorkSlice -> HarnessRun -> Loop evidence -> EvidencePack -> Accept / Rework / Reject
@@ -14,34 +16,32 @@ Task -> Contract -> Approval -> WorkSlice -> HarnessRun -> Loop evidence -> Evid
 
 ### Самый простой сценарий
 
-Каждый раз, когда хочешь дать системе задачу:
+Каждый раз, когда хотите дать системе задачу:
 
 ```text
-Tasks -> Save task -> Start safe run -> Loops -> Advance -> Evidence Pack -> Reports
+Run -> describe the change -> Start safe run -> checks -> EvidencePack -> decision
 ```
 
 Расшифровка:
 
-1. Открой `Tasks`.
-2. В `Task Composer` напиши задачу обычным текстом.
-3. Нажми `Save task`.
-4. На карточке задачи нажми `Start safe run`.
-5. Приложение само создаст contract, slice и HarnessRun.
-6. Открой `Loops`.
-7. В блоке `Harness Runs` нажимай `Advance`, пока не появится статус:
+1. Откройте `Run`.
+2. Укажите короткое название и вставьте ТЗ обычным текстом.
+3. При необходимости раскройте `Scope and acceptance details`.
+4. Нажмите `Start safe run`.
+5. Приложение само создаст TaskContract, WorkSlice и HarnessRun.
+6. В блоке `Run checks` нажимайте `Advance checks`, пока не появится статус:
 
 ```text
 evidence_ready
 ```
 
-8. Нажми `Evidence Pack`.
-9. Открой `Reports`.
-10. Посмотри итоговый отчет и реши: принять, переделать или отклонить.
+7. Нажмите `Generate proof package`.
+8. Проверьте итог и решите: принять, вернуть на доработку или отклонить.
 
 Если коротко совсем:
 
 ```text
-Создал задачу -> Start safe run -> Advance до evidence_ready -> Evidence Pack -> Reports
+Описал задачу -> Start safe run -> Advance checks до evidence_ready -> EvidencePack -> решение
 ```
 
 ### Что не трогать в обычной работе

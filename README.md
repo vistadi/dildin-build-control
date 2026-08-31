@@ -1,7 +1,7 @@
 # Dildin Build Control
 
 <p align="center">
-  <img src="assets/app-icon-source.png" alt="Dildin Build Control" width="120">
+  <img src="assets/app-icon-source.png" alt="Dibi, the Dildin Build Control border-collie mascot" width="120">
 </p>
 
 <p align="center">
@@ -19,7 +19,9 @@
 
 DBC proves what an AI coding agent changed, checked, and was allowed to do before a human accepts the result. It creates a portable EvidencePack with approved scope, build/test evidence, review and security verdicts, unresolved risks, and the final decision.
 
-Use DBC when Codex CLI, Claude Code, or another local agent can implement the change, but your team still needs one provider-neutral acceptance record.
+Use DBC when Codex CLI, Claude Code, Kimi, Qwen, an OpenAI-compatible API, or another
+local agent can implement the change, but you still need one provider-neutral
+acceptance record and one governed MCP tool boundary.
 
 > [!IMPORTANT]
 > DBC is alpha software. Use mock or controlled-smoke mode first. Published macOS builds are currently unsigned and may trigger a Gatekeeper warning.
@@ -42,6 +44,7 @@ The primary Run screen takes an operator from one bounded request to a verified 
 - **Explicit human control.** DBC never branches, stages, commits, pushes, deploys, resets, or runs destructive commands automatically.
 - **Bounded execution.** Task contracts define allowed paths, denied paths, acceptance criteria, budgets, and stop conditions.
 - **Provider-agnostic routing.** Use Mock, Codex CLI, Claude Code CLI, Generic CLI, or local terminal runners by role.
+- **Governed MCP access.** Connections start disabled, tool calls pass a DBC policy proxy, and side effects require run-scoped approval.
 - **Local-first project memory.** Portable `.dbc` contracts keep policy, tasks, approvals, loop manifests, evidence, and reports with the project.
 - **Security gates.** Secret-like prompt content blocks real provider sends, persisted output is redacted, and sensitive actions require approval.
 
@@ -65,6 +68,7 @@ Agent tools already provide their own sandbox, permission, and hook controls. DB
 - review and security verdicts;
 - pending approvals and unresolved risks;
 - the final human Accept, Rework, or Reject decision.
+- the sealed provider/model/routing identity, MCP activity summary, and known-confidence usage record.
 
 ## Production Loop
 
@@ -100,13 +104,33 @@ pnpm install
 pnpm dev
 ```
 
-Open the app, click **Load demo task**, then **Create and start safe run**. Advance the deterministic checks, generate the proof package, and make the final decision.
+Open the app, click **Load demo**, then **Start safe run**. Advance the deterministic checks, generate the proof package, and make the final decision.
 
 ### Desktop app
 
 ```bash
 pnpm tauri dev
 ```
+
+### Kimi, Qwen, MCP, and API adapters
+
+DBC includes versioned, safety-checked CLI contracts for Kimi Code and Qwen Code. Their
+official read-only templates are available under **Settings → Advanced → Add CLI
+Provider** and start disabled in mock mode. Qwen real execution requires plan approval,
+safe mode, and zero built-in tool calls; yolo and non-zero tool budgets are normalized or
+rejected. Kimi real execution remains blocked because its print/AFK built-ins cannot yet
+be mediated honestly, even though external MCP calls can use the DBC proxy.
+
+The MCP Connection Center persists portable `.dbc/mcp-connections.yaml` and
+`.dbc/tool-policies.yaml` contracts. Stdio discovery negotiates the current protocol and
+falls back to the stable baseline; tools are not enabled until discovery succeeds.
+`scripts/dbc-mcp-proxy.mjs` enforces tool intent, path/network rules, retries,
+idempotency, run-scoped approvals, and redacted JSONL evidence.
+
+Disabled Qwen and Kimi OpenAI-compatible API templates use HTTPS endpoints, curated
+source-backed model metadata, and macOS Keychain references. Contract checks never read
+or print secret values and never send a paid model request. API execution remains off
+until a separately approved live fixture is verified.
 
 ### Safe smoke run
 
@@ -128,6 +152,9 @@ Pre-release macOS packages are published under [GitHub Releases](https://github.
 - Control Tower and Guided Run operator workflows
 - Task Composer with checksum-backed task contracts
 - Provider Manager and role-based CLI routing
+- Routing Simulator, Team Builder, fallback journal, and balanced Kimi/Qwen policy
+- MCP Connection Center, ToolPolicy proxy, run approvals, and tool-call evidence
+- Curated Kimi/Qwen model catalog and keychain-only API contract checks
 - Loop preflight, retries, recovery, and approval queue
 - Scope, budget, command-policy, and secret-detection gates
 - Evidence Dashboard and generated acceptance reports
@@ -144,19 +171,23 @@ Pre-release macOS packages are published under [GitHub Releases](https://github.
 - [90-second demo script](docs/DEMO_SCRIPT.md)
 - [macOS signing and notarization](docs/RELEASE_SIGNING.md)
 - [macOS installation guide](docs/INSTALL.md)
-- [Russian User Guide](docs/DBC_USER_GUIDE_RU.md)
 - [Example `.dbc` workspace](examples/dbc-workspace/.dbc/README.md)
 - [Demo project](examples/demo-project/README.md)
 - [CLI profile example](docs/cli-profiles.example.yaml)
 - [Design and usability audit](docs/design-audit/audit.md)
-
-The longer Russian production and testing guides are available under [`docs/`](docs/).
 
 ## Verify
 
 ```bash
 pnpm build
 pnpm guided-run-smoke
+pnpm provider-adapter-smoke
+pnpm mcp-policy-smoke
+pnpm mcp-proxy-smoke
+pnpm api-adapter-smoke
+pnpm ui-quality-smoke
+pnpm native-contract-smoke
+pnpm performance-budget
 pnpm controlled-smoke
 pnpm dbc:verify -- --latest
 cargo test --manifest-path src-tauri/Cargo.toml
@@ -165,12 +196,18 @@ cargo test --manifest-path src-tauri/Cargo.toml
 `dbc:verify` exits non-zero when required artifacts are missing, approvals remain pending, scope does not pass, or no step evidence exists. The same checks run in GitHub Actions. Real provider calls are not required for the test suite.
 
 When validating a loop while intentionally developing DBC in an already-dirty worktree, use
-`pnpm dbc:verify -- --latest --allow-existing-worktree-changes`. This explicit local-only
-waiver applies to the scope gate; CI always runs the strict command above.
+`pnpm controlled-smoke -- --allow-existing-worktree-changes` followed by
+`pnpm dbc:verify -- --latest --allow-existing-worktree-changes`. This explicit
+local-only waiver applies only to pre-existing outside-scope changes; denied-path matches
+still fail and CI always runs the strict commands above.
 
 ## Project Status
 
-DBC is an early public alpha. The primary Run and deterministic browser preview are designed for fast evaluation; real provider execution remains approval-gated. The next release priority is signed/notarized macOS distribution and more provider adapter fixtures. See the [roadmap](docs/ROADMAP.md) and [changelog](CHANGELOG.md).
+DBC is an early public alpha. The primary Run and deterministic browser preview are
+designed for fast evaluation; real provider and MCP execution remains policy- and
+approval-gated. The next release priority is native installed-provider fixtures and a
+signed/notarized universal macOS release. See the [roadmap](docs/ROADMAP.md) and
+[changelog](CHANGELOG.md).
 
 ## Contributing
 

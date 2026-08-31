@@ -48,7 +48,15 @@ check("advance action", app.includes("Advance checks"), "Guided Run exposes the 
 check("evidence action", app.includes("Generate proof package"), "Guided Run exposes EvidencePack generation.");
 check("run context isolation", app.includes("evidencePackForRun") && app.includes("approvalMatchesRun") && app.includes("loopMatchesRun"), "Evidence, approvals, and loop artifacts are scoped to one HarnessRun.");
 check("evidence empty state", app.includes("No current run selected") && app.includes("Historical smoke reports and unrelated costs stay out"), "Evidence does not render stale reports without a current run.");
-check("three-stage onboarding", app.includes('label: "Describe"') && app.includes('label: "Run checks"') && app.includes('label: "Decide"'), "The primary journey uses three user-facing stages.");
+check(
+  "three-stage onboarding",
+  [
+    'label: "Describe"',
+    'label: "Guardrails"',
+    'label: "Evidence"',
+  ].every((text) => app.includes(text)),
+  "The primary journey uses three English-only user-facing stages.",
+);
 check("approval decision surface", app.includes("Decisions for this run") && app.includes("Hidden records are not linked to the current run"), "Approvals hide unrelated global records from the primary surface.");
 check("settings advanced disclosure", app.includes("Advanced provider and policy settings"), "Provider contracts and policy diagnostics are grouped under Advanced.");
 check("read-only report viewer", app.includes("Raw report and artifact paths") && app.includes('<pre className="report-box">'), "Raw evidence is rendered as read-only output rather than an editable-looking textarea.");

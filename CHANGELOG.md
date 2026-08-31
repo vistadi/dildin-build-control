@@ -12,23 +12,36 @@ The project follows [Semantic Versioning](https://semver.org/) while release sta
 - EvidencePack verification via `dbc:verify`, enforced in CI and release checks.
 - A Homebrew Cask generator that requires real release checksums.
 - Positioning, demo, signing, and 30-day go-to-market playbooks.
+- Versioned Kimi/Qwen CLI contracts, stream normalization, runtime safety gates, and a
+  balanced capability-aware routing preset.
+- MCP Connection Center, portable ToolPolicy contracts, run-scoped approval proxy,
+  redacted tool-call evidence, and malicious/integration fixtures.
+- Disabled keychain-only Kimi/Qwen API profiles, source-backed model catalog, and
+  normalized reports/usage.
+- EvidencePack v2 artifact verification, routing/MCP summaries, and unknown-safe usage.
+- English-only navigation, accessibility/CSP hardening, UI/native quality smokes, and
+  production asset performance budgets.
 
 ### Changed
 
 - The default experience now starts in a simplified Run flow with expert tools grouped under Advanced.
 - Evidence and final acceptance are presented as the primary product outcome.
 - Release automation is ready to consume Apple signing and notarization secrets without claiming unsigned artifacts are signed.
+- Primary routes now carry immutable provider/model/adapter/fallback/MCP execution
+  identity and acceptance fails closed on identity or EvidencePack v2 verification drift.
 
 ### Fixed
 
 - Controlled-smoke scope evidence now preserves complete Git status paths.
 - Evidence summaries ignore unrelated pending approvals from other tasks and loops.
 - Final Guided Run decisions can no longer be accepted repeatedly.
+- Controlled smoke supports an explicit local-only waiver for pre-existing outside-scope
+  worktree changes while denied paths still fail.
 
 ### Planned
 
 - Signed and notarized macOS distribution.
-- Focused regression tests for scope, provider, and acceptance gates.
+- Installed-version Kimi/Qwen fixtures and approved remote OAuth MCP conformance.
 - A compact Guided Run demo video or GIF.
 
 ## [0.1.1-alpha.3] - 2026-07-20

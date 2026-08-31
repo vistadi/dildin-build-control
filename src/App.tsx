@@ -9,6 +9,7 @@ import {
   CircleDollarSign,
   ClipboardCheck,
   Code2,
+  Eye,
   FileText,
   FolderGit2,
   Gauge,
@@ -23,6 +24,8 @@ import {
   ShieldCheck,
   Square,
   TerminalSquare,
+  Target,
+  Wrench,
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -128,6 +131,9 @@ import type {
   TaskLoopProfile,
   TaskPriority,
 } from "./types";
+
+const dibiMark = new URL("../assets/brand/dibi-mark.png", import.meta.url).href;
+const dibiWorkshop = new URL("../assets/brand/dibi-workshop.png", import.meta.url).href;
 
 type View =
   | "home"
@@ -1946,11 +1952,15 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      <a className="skip-link" href="#main-content">
+        Skip to content
+      </a>
+      <aside className="sidebar" aria-label="Primary navigation">
         <div className="brand">
-          <div className="brand-mark">DBC</div>
-          <div>
-            <strong>Dildin Build Control</strong>
+          <img className="brand-mark" src={dibiMark} alt="" />
+          <div className="brand-lockup">
+            <strong>DBC</strong>
+            <b>Dibi</b>
             <span>Evidence before merge</span>
           </div>
         </div>
@@ -1961,6 +1971,7 @@ export function App() {
               className={view === item.id ? "nav-item active" : "nav-item"}
               onClick={() => setView(item.id)}
               title={item.label}
+              aria-current={view === item.id ? "page" : undefined}
             >
               <item.icon size={18} />
               <span>{item.label}</span>
@@ -1981,6 +1992,7 @@ export function App() {
                   className={view === item.id ? "nav-item advanced active" : "nav-item advanced"}
                   onClick={() => setView(item.id)}
                   title={item.label}
+                  aria-current={view === item.id ? "page" : undefined}
                 >
                   <item.icon size={17} />
                   <span>{item.label}</span>
@@ -1989,16 +2001,22 @@ export function App() {
             : null}
         </nav>
         <div className="sidebar-footer">
-          <span>{isTauriRuntime() ? "Desktop runtime" : "Safe interactive preview"}</span>
-          <strong>{isTauriRuntime() ? "Official CLI/API only" : "No files or providers are touched"}</strong>
+          <ShieldCheck size={24} aria-hidden="true" />
+          <div>
+            <span>{isTauriRuntime() ? "Safe by design" : "Safe interactive preview"}</span>
+            <strong>{isTauriRuntime() ? "Preview first. Human approval stays required" : "No files or providers are touched"}</strong>
+          </div>
         </div>
       </aside>
 
-      <main className="content">
+      <main className="content" id="main-content" tabIndex={-1}>
         <header className="topbar">
           <div>
             <p className="eyebrow">Evidence-backed delivery</p>
             <h1>{pageTitle(view)}</h1>
+            {view === "guided" ? (
+              <p className="topbar-subtitle">Plan, preview, and verify changes with guardrails.</p>
+            ) : null}
           </div>
           <div className="topbar-actions">
             <button className="ghost-btn" onClick={resetDemo}>
@@ -3237,48 +3255,44 @@ function GuidedRunView({
 
   const wizardSteps = [
     { label: "Describe", done: describeReady, detail: activeTask?.title ?? (draftReady ? "Ready to start" : "One bounded change") },
-    { label: "Run checks", done: checksReady, detail: latestRun?.status ?? "Not started" },
-    { label: "Decide", done: decisionReady, detail: latestPack?.finalDecision || (latestPack ? "Evidence ready" : "Pending") },
+    { label: "Guardrails", done: checksReady, detail: latestRun?.status ?? "Not started" },
+    { label: "Evidence", done: decisionReady, detail: latestPack?.finalDecision || (latestPack ? "Evidence ready" : "Pending") },
   ];
 
   return (
     <section className="view-stack guided-run">
-      <Panel title="Guided Run" icon={ClipboardCheck}>
-        {!isTauriRuntime() ? (
-          <div className="runtime-notice" role="status">
-            <ShieldCheck size={18} />
-            <div>
-              <strong>Safe interactive preview</strong>
-              <p>Try the complete lifecycle here. Preview evidence is deterministic and no project files, providers, or credentials are touched.</p>
+      <section className="guided-protection-card" aria-labelledby="guided-protection-title">
+        <div className="protection-intro">
+          <span className="protection-icon" aria-hidden="true"><ShieldCheck size={25} /></span>
+          <div>
+            <div className="protection-title-row">
+              <h2 id="guided-protection-title">Your run is protected</h2>
+              <span className={`status-pill ${completeness === 3 ? "ok" : "warning"}`}>{completeness}/3 · {currentStageLabel}</span>
             </div>
+            <p>
+              {isTauriRuntime()
+                ? "Preview first by default. Scope, providers, and risky actions stay under your control."
+                : "Safe preview mode: no project files, providers, or credentials are touched."}
+            </p>
           </div>
-        ) : null}
-        <OperatorHint
-          step="One guided path"
-          title={
-            currentStage === "paste_tz"
-              ? "Describe one bounded change"
-              : currentStage === "decided"
-                ? `Result ${displayValue(latestPack?.finalDecision)}`
-              : currentStage === "ready_to_run"
-                ? "The safe run is ready"
-                : currentStage === "evidence_ready"
-                  ? "Generate the proof package"
-                  : currentStage === "decision_ready"
-                    ? "Make the final decision"
-                    : "Advance the verified checks"
-          }
-          detail="Run is the normal path. Advanced screens remain available for provider, policy, and recovery diagnostics."
-          status={latestPack?.finalDecision === "accepted" ? "accepted" : readyForAccept ? "ready" : currentStage === "paste_tz" ? "waiting" : "running"}
-        />
-        <DecisionStrip
-          items={[
-            { label: "Journey", value: `${completeness}/3`, tone: completeness === 3 ? "ok" : completeness ? "warning" : "failed" },
-            { label: "Current stage", value: currentStageLabel, tone: currentStage === "decision_ready" ? "ok" : "warning" },
-            { label: "Pending approvals", value: String(pendingApprovals.length), tone: pendingApprovals.length ? "warning" : "ok" },
-            { label: "Runtime", value: isTauriRuntime() ? "desktop" : "safe preview", tone: "ok" },
-          ]}
-        />
+        </div>
+        <div className="protection-facts">
+          <div className="protection-fact">
+            <FolderGit2 size={22} />
+            <div><span>Project scope</span><strong>{activeProject?.name ?? "This project"}</strong></div>
+          </div>
+          <div className="protection-fact violet">
+            <Bot size={22} />
+            <div><span>Agent team</span><strong>{state.agents.length} AI roles</strong></div>
+          </div>
+          <div className="protection-fact coral">
+            <Wrench size={22} />
+            <div><span>Tools & checks</span><strong>{pendingApprovals.length ? `${pendingApprovals.length} need a decision` : "Built-in guardrails"}</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel guided-workbench" aria-labelledby="guided-workbench-title">
         <div className="guided-stepper">
           {wizardSteps.map((step, index) => (
             <article className={step.done ? "guided-step done" : "guided-step"} key={step.label}>
@@ -3288,43 +3302,39 @@ function GuidedRunView({
             </article>
           ))}
         </div>
-      </Panel>
-
-      <div className="two-column guided-grid">
-        <Panel
-          title="1. Describe the change"
-          icon={FileText}
-          action={
-            <div className="action-toolbar">
-              <button className="ghost-btn compact-btn" onClick={loadDemoTask}>
-                <Play size={15} />
-                Load demo
-              </button>
-              <button className="primary-btn compact-btn" onClick={createAndRun} disabled={!draftReady}>
-                <Play size={15} />
-                Start safe run
-              </button>
-            </div>
-          }
-        >
-          <div className="task-composer">
-            <div className="composer-grid">
-              <label>
-                Product task title
-                <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Implement the first usable billing screen" />
+        <div className="guided-workbench-body">
+          <div className="guided-composer-main">
+            <header className="guided-composer-head">
+              <span className="eyebrow">Step 1 · describe</span>
+              <h2 id="guided-workbench-title">What should the agents change?</h2>
+              <p>Describe the goal, context, and expected result. DBC freezes the boundaries before the run.</p>
+            </header>
+            <div className="task-composer workshop-composer">
+              <label className="workshop-field workshop-title-field">
+                Change title
+                <input
+                  value={title}
+                  onChange={(event) => setTitle(event.target.value)}
+                  placeholder="Example: first usable billing screen"
+                />
               </label>
-              <label className="wide-field">
-                TZ / request
-                <textarea value={tz} onChange={(event) => setTz(event.target.value)} placeholder="Paste the task, context, constraints, and expected product result." />
+              <label className="workshop-field workshop-request-field">
+                Request
+                <textarea
+                  value={tz}
+                  maxLength={5000}
+                  onChange={(event) => setTz(event.target.value)}
+                  placeholder="Describe the task, context, constraints, and expected product result…"
+                />
+                <span className="field-counter">{tz.length} / 5000</span>
               </label>
-            </div>
             <button
               className="disclosure-button"
               type="button"
               aria-expanded={advancedTaskOpen}
               onClick={() => setAdvancedTaskOpen((open) => !open)}
             >
-              <span>Scope and acceptance details</span>
+                <span>Scope and acceptance details</span>
               <strong>{advancedTaskOpen ? "−" : "+"}</strong>
             </button>
             {advancedTaskOpen ? (
@@ -3343,11 +3353,31 @@ function GuidedRunView({
                 </label>
               </div>
             ) : null}
-            <p className="helper-text">DBC creates the contract, bounds the scope, and starts one safe run from this form.</p>
+              <div className="workshop-actions">
+                <button className="ghost-btn" onClick={loadDemoTask}>
+                  <RotateCcw size={16} />
+                  Load demo
+                </button>
+                <button className="primary-btn safe-run-btn" onClick={createAndRun} disabled={!draftReady}>
+                  <Play size={20} />
+                  <span><strong>Start safe run</strong><small>Preview first — without touching your project</small></span>
+                </button>
+              </div>
+              <p className="helper-text">DBC creates the contract, bounds the scope, and links the result to an EvidencePack.</p>
+            </div>
           </div>
-        </Panel>
-
-        <Panel title="Scope preview" icon={ListChecks}>
+          <aside className="guided-illustration-pane" aria-label="Safe run principles">
+            <img src={dibiWorkshop} alt="Dibi reviews a technical blueprint in the workshop" />
+            <div className="guided-safety-list">
+              <div><Target size={22} /><p><strong>Bounded by design</strong><span>You set the scope. DBC keeps the work contained.</span></p></div>
+              <div><Eye size={22} /><p><strong>Preview first</strong><span>See exactly what would change before anything is applied.</span></p></div>
+              <div><ShieldCheck size={22} /><p><strong>You decide</strong><span>Risky actions and final acceptance remain human-controlled.</span></p></div>
+            </div>
+          </aside>
+        </div>
+        {(activeTask || hasDraftInput) ? (
+          <div className="workshop-scope-preview">
+            <div className="scope-preview-heading"><ListChecks size={18} /><strong>Scope preview</strong></div>
           {activeTask ? (
             <div className="contract-preview">
               <span className={`status-pill ${activeTask.status}`}>{displayValue(activeTask.status)}</span>
@@ -3374,7 +3404,7 @@ function GuidedRunView({
                 ) : null}
               </div>
             </div>
-          ) : hasDraftInput ? (
+          ) : (
             <div className="contract-preview draft-preview">
               <span className={`status-pill ${draftReady ? "ok" : "warning"}`}>{draftReady ? "ready" : "incomplete"}</span>
               <strong>{title.trim() || "Untitled change"}</strong>
@@ -3391,15 +3421,10 @@ function GuidedRunView({
               </div>
               <p className="helper-text">This scope will be frozen into the TaskContract when you start.</p>
             </div>
-          ) : (
-            <div className="empty-state">
-              <span className="status-pill warning">waiting</span>
-              <strong>Describe one change</strong>
-              <p>The approved and forbidden paths will appear here before the run starts.</p>
-            </div>
           )}
-        </Panel>
-      </div>
+          </div>
+        ) : null}
+      </section>
 
       <div className="two-column guided-grid">
         <Panel title="2. Run checks" icon={RotateCcw}>
@@ -3485,7 +3510,7 @@ function GuidedRunView({
                 ? `Decision finalized: ${displayValue(latestPack?.finalDecision)}. Open Evidence to inspect the proof package.`
                 : readyForAccept
                   ? "All primary gates are green. You can accept the result."
-                : "Accept stays disabled until the run, evidence pack, step evidence, and approvals are complete."}
+                  : "Accept stays disabled until the run, evidence pack, step evidence, and approvals are complete."}
             </p>
           </div>
         </Panel>

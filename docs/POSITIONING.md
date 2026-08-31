@@ -15,16 +15,19 @@ a human accepts the result.
 
 ## Primary User
 
-Start with engineering leads, small software agencies, and teams with audit or
-customer-acceptance requirements that already use one or more CLI coding agents.
+Start with solo AI developers who already use one or more coding agents on local
+projects and want trustworthy proof before accepting a change.
 
-The strongest early-fit team:
+The strongest early-fit operator:
 
-- has 3–30 developers;
-- uses Codex CLI, Claude Code, or both;
-- reviews AI-generated changes before merge;
+- works actively in one or more local repositories;
+- uses Codex CLI, Claude Code, Kimi, Qwen, or a compatible local/API agent;
+- personally reviews AI-generated changes before merge;
 - has experienced missing tests, scope expansion, or unverifiable “done” claims;
 - values local-first operation and explicit human approval.
+
+Engineering leads, small agencies, and teams with audit or customer-acceptance
+requirements are the next expansion segment, not the first-run message.
 
 ## Core Job To Be Done
 
@@ -38,8 +41,8 @@ rework, or reject the result with confidence.
 2. One bounded request becomes one reviewable EvidencePack.
 3. Missing proof blocks acceptance.
 4. Human approval remains explicit.
-5. Codex, Claude Code, generic CLI, and local checks can participate in the same
-   acceptance workflow.
+5. Codex, Claude Code, Kimi, Qwen, generic CLI, and local checks can participate in the
+   same acceptance workflow when their adapter and safety requirements are satisfied.
 
 ## What Not To Lead With
 
@@ -72,8 +75,8 @@ owner decides from one EvidencePack.
 
 Try the deterministic safe preview:
 
-1. Click `Load demo task`.
-2. Click `Create and start safe run`.
+1. Click `Load demo`.
+2. Click `Start safe run`.
 3. Advance the checks.
 4. Generate the proof package.
 5. Accept, request rework, or reject.

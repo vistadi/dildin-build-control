@@ -36,6 +36,26 @@ jobs:
       - name: Guided run smoke
         run: pnpm guided-run-smoke
 
+      - name: Provider adapter contract smoke
+        run: pnpm provider-adapter-smoke
+
+      - name: MCP policy contract smoke
+        run: pnpm mcp-policy-smoke
+
+      - name: MCP proxy integration smoke
+        run: pnpm mcp-proxy-smoke
+
+      - name: API adapter contract smoke
+        run: pnpm api-adapter-smoke
+
+      - name: UI quality and native contract smoke
+        run: |
+          pnpm ui-quality-smoke
+          pnpm native-contract-smoke
+
+      - name: Enforce frontend performance budget
+        run: pnpm performance-budget
+
       - name: Verify a deterministic EvidencePack
         run: |
           pnpm controlled-smoke
