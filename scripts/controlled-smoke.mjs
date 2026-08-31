@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const projectPath = process.cwd();
+const allowExistingWorktreeChanges = process.argv.includes("--allow-existing-worktree-changes");
 const loopId = `loop-${Date.now()}`;
 const taskId = "SMOKE-LOOP-CONTROLLED";
 const taskTitle = "Controlled smoke loop: local evidence package";
@@ -511,9 +512,16 @@ function scopeGateFromGit(git) {
   const deniedMatches = changedFiles.filter((file) => deniedPaths.some((denied) => scopePathMatches(file, denied)));
   return {
     version: 1,
-    mode: git.isGitRepo ? (allowedPaths.length ? "git_changed_files" : "broad_no_allowed_paths") : "unverified_non_git",
+    mode: git.isGitRepo
+      ? allowExistingWorktreeChanges
+        ? "git_changed_files_with_explicit_existing_change_waiver"
+        : allowedPaths.length
+          ? "git_changed_files"
+          : "broad_no_allowed_paths"
+      : "unverified_non_git",
     verified: Boolean(git.isGitRepo),
-    passed: outsideAllowed.length === 0 && deniedMatches.length === 0,
+    passed: (outsideAllowed.length === 0 || allowExistingWorktreeChanges) && deniedMatches.length === 0,
+    existingChangesWaived: allowExistingWorktreeChanges,
     allowedPaths,
     deniedPaths,
     changedFiles,

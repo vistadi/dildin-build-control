@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "adapters": [
+    {
+      "command": "kimi",
+      "adapterId": "kimi/headless-stream-json/v1",
+      "emptyArgsExpected": "-p \"{{prompt}}\" --output-format stream-json --plan",
+      "promptModeExpected": "arg",
+      "requiredDiagnostic": "Kimi print mode auto-approves internal tool calls"
+    },
+    {
+      "command": "qwen",
+      "adapterId": "qwen/headless-stream-json/v1",
+      "emptyArgsExpected": "-p \"{{prompt}}\" --output-format stream-json --approval-mode plan --safe-mode --max-tool-calls 0 --max-session-turns 3 --max-wall-time 120s",
+      "promptModeExpected": "arg",
+      "unsafeArgs": "--output-format stream-json --yolo",
+      "safeArgsExpected": "--output-format stream-json --approval-mode plan --safe-mode --max-tool-calls 0 --max-session-turns 3 --max-wall-time 120s",
+      "requiredDiagnostic": "Unsafe Qwen auto-approval arguments"
+    }
+  ],
+  "legacyRoutes": {
+    "codex_build_claude_review": "route-codex-build-claude-review",
+    "codex_only": "route-codex-only",
+    "claude_review_only": "route-claude-review-only",
+    "mock_only": "route-mock-only"
+  }
+}

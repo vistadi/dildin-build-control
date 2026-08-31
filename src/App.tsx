@@ -27,9 +27,13 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { normalizeProviderConfig, providerContractDiagnostics } from "./cliContracts";
+import { normalizeProviderConfig, parseArgsTemplate as parseCliArgsTemplate, providerContractDiagnostics } from "./cliContracts";
 import { loopTemplate, providerPresets } from "./data";
+import { mergeVerifiedModelCatalog, validateApiProvider } from "./apiAdapters";
+import { evaluateMcpTool, normalizeMcpConnection, validateMcpConnection } from "./mcp";
+import { adapterForCommand } from "./providerAdapters";
 import { loadState, resetState, saveState, uid } from "./storage";
+import { buildHarnessExecutionIdentitySnapshot, compareReadOnlyOutputs, resolveRoutingPolicy, routingPolicyIdForLegacy, simulateRouting } from "./routing";
 import {
   advanceBackendLoop,
   advanceHarnessRun,
@@ -70,6 +74,7 @@ import {
   loadTaskSpec,
   resolveBackendLoopApproval,
   recoverProjectState,
+  recordMcpApproval,
   resetBrowserHarnessOverview,
   retryBackendLoop,
   runControlledSmokeLoop,
@@ -79,6 +84,8 @@ import {
   startHarnessRun,
   startBackendLoop,
   testCliProvider,
+  testApiProviderContract,
+  testMcpConnection,
 } from "./tauriBridge";
 import type { ProjectConfigDiagnostic } from "./tauriBridge";
 import type { LoopRunSummary } from "./tauriBridge";
@@ -100,16 +107,22 @@ import type {
   LoopStateMachineReport,
   LoopStep,
   LoopState,
+  McpConnectionCheckResult,
+  McpServerConnection,
+  McpTransport,
   Provider,
   ProviderSessionReport,
   ProviderStrategy,
   RealMicroComparisonReport,
   ProviderRunMode,
+  ProviderCostTier,
+  ProviderLatencyTier,
   RealMicroPreflightReport,
   RealMicroRunbookReport,
   RevertEvidenceReport,
   RunJournalReport,
   RiskLevel,
+  RoutingPolicy,
   SupportBundleReport,
   Task,
   TaskLoopProfile,
@@ -670,6 +683,9 @@ export function App() {
           commandPolicy: recovered.commandPolicy.allow.length || recovered.commandPolicy.approvalRequired.length || recovered.commandPolicy.deny.length
             ? recovered.commandPolicy
             : current.commandPolicy,
+          mcpServers: recovered.mcpServers.length ? recovered.mcpServers : current.mcpServers,
+          toolPolicies: recovered.toolPolicies.length ? recovered.toolPolicies : current.toolPolicies,
+          modelCatalog: recovered.modelCatalog.length ? mergeVerifiedModelCatalog(current.modelCatalog, recovered.modelCatalog) : current.modelCatalog,
           tasks: mergeTasks(current.tasks, recovered.tasks),
           memory: mergeMemory(current.memory, recovered.memory),
           audit: [
@@ -1256,7 +1272,18 @@ export function App() {
         throw new Error(`WorkSlice ${slice.id} is ${slice.status}; approved slice is required.`);
       }
 
-      const run = await startHarnessRun(project.id, project.path, task.id, contract.id, slice.id);
+      const executionIdentity = buildHarnessExecutionIdentitySnapshot(
+        task,
+        snapshot.providers,
+        snapshot.agents,
+        snapshot.routingPolicies,
+        snapshot.mcpServers.filter((server) => server.enabled && server.health !== "failed").map((server) => server.id),
+      );
+      const routingSimulation = simulateRouting(resolveRoutingPolicy(task, snapshot.routingPolicies), snapshot.providers);
+      if (routingSimulation.status !== "ready") {
+        throw new Error(`Routing simulation is ${routingSimulation.status}; open AI Team and resolve fallback decisions.`);
+      }
+      const run = await startHarnessRun(project.id, project.path, task.id, contract.id, slice.id, executionIdentity, routingSimulation);
       if (run.compatibilityLoopRunId && isTauriRuntime()) {
         const loop = await getBackendLoop(run.compatibilityLoopRunId);
         setCurrentLoop(loop);
@@ -1273,6 +1300,10 @@ export function App() {
           ? current.loopSteps
           : loopTemplate.map((step, index) => ({
               ...step,
+              providerId:
+                executionIdentity.providers.find((identity) => identity.roleId === step.roleId)?.providerId ?? step.providerId,
+              providerRunMode:
+                executionIdentity.providers.find((identity) => identity.roleId === step.roleId)?.runMode ?? "mock",
               status: index === 0 ? "running" : "waiting",
               output: index === 0 ? "Safe preview run started." : "",
             })),
@@ -1316,13 +1347,25 @@ export function App() {
   async function startHarnessForTask(taskId: string) {
     const snapshot = stateRef.current;
     const project = snapshot.projects.find((item) => item.id === snapshot.activeProjectId) ?? snapshot.projects[0];
+    const task = snapshot.tasks.find((item) => item.id === taskId);
     const contract = latestContractForTask(taskId, harnessOverview.contracts, ["approved"]);
     const slice = latestSliceForTask(taskId, harnessOverview.slices, ["approved"]);
-    if (!project || !contract || !slice) {
+    if (!project || !task || !contract || !slice) {
       return recordHarnessError("HarnessRun start failed", `Approved contract and approved slice are required for ${taskId}.`);
     }
     try {
-      const run = await startHarnessRun(project.id, project.path, taskId, contract.id, slice.id);
+      const executionIdentity = buildHarnessExecutionIdentitySnapshot(
+        task,
+        snapshot.providers,
+        snapshot.agents,
+        snapshot.routingPolicies,
+        snapshot.mcpServers.filter((server) => server.enabled && server.health !== "failed").map((server) => server.id),
+      );
+      const routingSimulation = simulateRouting(resolveRoutingPolicy(task, snapshot.routingPolicies), snapshot.providers);
+      if (routingSimulation.status !== "ready") {
+        throw new Error(`Routing simulation is ${routingSimulation.status}; open AI Team and resolve fallback decisions.`);
+      }
+      const run = await startHarnessRun(project.id, project.path, taskId, contract.id, slice.id, executionIdentity, routingSimulation);
       if (run.compatibilityLoopRunId && isTauriRuntime()) {
         const loop = await getBackendLoop(run.compatibilityLoopRunId);
         setCurrentLoop(loop);
@@ -1493,7 +1536,23 @@ export function App() {
       }));
       return;
     }
-    const configuredSteps = buildConfiguredLoopSteps(snapshot.agents, snapshot.providers);
+    const activeRoutingPolicy = resolveRoutingPolicy(task, snapshot.routingPolicies);
+    const routingSimulation = simulateRouting(activeRoutingPolicy, snapshot.providers);
+    const configuredSteps = buildConfiguredLoopSteps(snapshot.agents, snapshot.providers, task, snapshot.routingPolicies);
+    if (routingSimulation.status !== "ready") {
+      setView(routingSimulation.status === "approval_required" ? "approvals" : "agents");
+      setState((current) => ({
+        ...current,
+        audit: [{
+          id: uid("AUD"),
+          time: currentTime(),
+          actor: "Dynamic Router",
+          action: "Loop routing blocked",
+          result: `${activeRoutingPolicy.name}: ${routingSimulation.status}. Review the routing simulator.`,
+        }, ...current.audit],
+      }));
+      return;
+    }
     const routingDiagnostics = buildProviderRoutingDiagnostics(snapshot.agents, snapshot.providers);
     const realLoopErrors = routingDiagnostics.filter((item) => item.level === "error");
     if (configuredSteps.some(isRealStep) && realLoopErrors.length) {
@@ -1529,6 +1588,7 @@ export function App() {
             priority: "normal",
             loopProfile: "mock",
             providerStrategy: "mock_only",
+            routingPolicyId: routingPolicyIdForLegacy("mock_only"),
             affectedPaths: [],
             allowedPaths: [],
             deniedPaths: [],
@@ -1564,6 +1624,7 @@ export function App() {
         taskSpecChecksum: taskSpec.checksum,
         memoryContext,
         memoryRefs,
+        routingSimulation,
         steps: configuredSteps,
       });
       setCurrentLoop(loop);
@@ -1593,6 +1654,7 @@ export function App() {
               priority: "normal",
               loopProfile: "mock",
               providerStrategy: "mock_only",
+              routingPolicyId: routingPolicyIdForLegacy("mock_only"),
               affectedPaths: [],
               allowedPaths: [],
               deniedPaths: [],
@@ -1679,6 +1741,7 @@ export function App() {
             priority: "normal",
             loopProfile: "controlled_smoke",
             providerStrategy: "mock_only",
+            routingPolicyId: routingPolicyIdForLegacy("mock_only"),
             affectedPaths: [".dbc/tasks", ".dbc/loops", ".dbc/evidence", ".dbc/artifacts", ".dbc/reports"],
             allowedPaths: [".dbc/tasks", ".dbc/loops", ".dbc/evidence", ".dbc/artifacts", ".dbc/reports", ".dbc/security", ".dbc/git"],
             deniedPaths: [".env", "node_modules", "src-tauri/target"],
@@ -1786,6 +1849,17 @@ export function App() {
     const approval = stateRef.current.approvals.find((item) => item.id === id);
     let resolvedLoop: LoopRunSnapshot | null = null;
     let resolveError = "";
+    if (approval?.kind === "mcp_tool_call" && status !== "pending") {
+      try {
+        const snapshot = stateRef.current;
+        const project = snapshot.projects.find((item) => item.id === snapshot.activeProjectId) ?? snapshot.projects[0];
+        const record = await recordMcpApproval(project.path, { ...approval, status });
+        resolveError = `MCP ${record.status}: ${record.path}`;
+      } catch (error) {
+        resolveError = error instanceof Error ? error.message : String(error);
+        return;
+      }
+    }
     if (approval?.loopId && approval.stepId && currentLoop?.id === approval.loopId && status !== "pending") {
       try {
         resolvedLoop = await resolveBackendLoopApproval({
@@ -2012,6 +2086,7 @@ export function App() {
             tasks={state.tasks}
             agents={state.agents}
             providers={state.providers}
+            routingPolicies={state.routingPolicies}
             activeProject={activeProject}
             harnessOverview={harnessOverview}
             createTask={createTask}
@@ -2058,7 +2133,9 @@ export function App() {
           <AgentsView
             agents={state.agents}
             providers={state.providers}
+            routingPolicies={state.routingPolicies}
             setAgents={(agents) => patchState({ agents: syncAssignedRoles(state.providers, agents) })}
+            setRoutingPolicies={(routingPolicies) => patchState({ routingPolicies })}
           />
         )}
         {view === "loops" && (
@@ -2109,6 +2186,7 @@ export function App() {
             audit={state.audit}
             costs={state.costs}
             providerSessionReport={providerSessionReport}
+            activeRunId={currentHarnessRun(harnessOverview)?.id ?? ""}
             onRefreshProviderSessionReport={() => refreshProviderSessionReport()}
           />
         )}
@@ -3122,6 +3200,7 @@ function GuidedRunView({
       priority: "normal",
       loopProfile: "mock",
       providerStrategy: "codex_build_claude_review",
+      routingPolicyId: routingPolicyIdForLegacy("codex_build_claude_review"),
       affectedPaths: allowed,
       allowedPaths: allowed,
       deniedPaths: lines(outOfScope),
@@ -3419,6 +3498,7 @@ function TasksView({
   tasks,
   agents,
   providers,
+  routingPolicies,
   activeProject,
   harnessOverview,
   createTask,
@@ -3438,6 +3518,7 @@ function TasksView({
   tasks: Task[];
   agents: AgentRole[];
   providers: Provider[];
+  routingPolicies: RoutingPolicy[];
   activeProject?: AppState["projects"][number];
   harnessOverview: HarnessOverview;
   createTask: (task: Task) => void;
@@ -3470,6 +3551,7 @@ function TasksView({
   const [priority, setPriority] = useState<TaskPriority>("normal");
   const [loopProfile, setLoopProfile] = useState<TaskLoopProfile>("mock");
   const [providerStrategy, setProviderStrategy] = useState<ProviderStrategy>("codex_build_claude_review");
+  const [routingPolicyId, setRoutingPolicyId] = useState(routingPolicyIdForLegacy("codex_build_claude_review"));
   const smokeReadiness = buildSmokeReadiness({ activeProject, agents, providers });
   const affected = lines(affectedPaths);
   const allowed = lines(allowedPaths);
@@ -3494,6 +3576,7 @@ function TasksView({
       priority,
       loopProfile,
       providerStrategy,
+      routingPolicyId,
       affectedPaths: affected,
       allowedPaths: allowed.length ? allowed : affected,
       deniedPaths: lines(deniedPaths),
@@ -3671,11 +3754,31 @@ function TasksView({
               </label>
               <label>
                 Provider strategy
-                <select value={providerStrategy} onChange={(event) => setProviderStrategy(event.target.value as ProviderStrategy)}>
+                <select
+                  value={providerStrategy}
+                  onChange={(event) => {
+                    const strategy = event.target.value as ProviderStrategy;
+                    setProviderStrategy(strategy);
+                    setRoutingPolicyId(routingPolicyIdForLegacy(strategy));
+                  }}
+                >
                   <option value="codex_build_claude_review">codex_build_claude_review</option>
                   <option value="codex_only">codex_only</option>
                   <option value="claude_review_only">claude_review_only</option>
                   <option value="mock_only">mock_only</option>
+                </select>
+              </label>
+              <label>
+                Routing policy
+                <select
+                  value={routingPolicyId}
+                  onChange={(event) => {
+                    const policy = routingPolicies.find((item) => item.id === event.target.value);
+                    setRoutingPolicyId(event.target.value);
+                    if (policy?.legacyProviderStrategy) setProviderStrategy(policy.legacyProviderStrategy);
+                  }}
+                >
+                  {routingPolicies.filter((policy) => policy.enabled).map((policy) => <option key={policy.id} value={policy.id}>{policy.name}</option>)}
                 </select>
               </label>
             </div>
@@ -3817,7 +3920,7 @@ function PreflightView({
   onRun: (task?: Task) => void;
   onBack: () => void;
 }) {
-  const steps = buildConfiguredLoopSteps(state.agents, state.providers);
+  const steps = buildConfiguredLoopSteps(state.agents, state.providers, task, state.routingPolicies);
   const gates = buildLoopPreflight({ state, activeProject, task, steps, operatorChecklist });
   const blockers = gates.filter((gate) => gate.level === "error");
   const warnings = gates.filter((gate) => gate.level === "warning");
@@ -3899,12 +4002,34 @@ function PreflightView({
 function AgentsView({
   agents,
   providers,
+  routingPolicies,
   setAgents,
+  setRoutingPolicies,
 }: {
   agents: AgentRole[];
   providers: Provider[];
+  routingPolicies: RoutingPolicy[];
   setAgents: (agents: AgentRole[]) => void;
+  setRoutingPolicies: (policies: RoutingPolicy[]) => void;
 }) {
+  const [selectedPolicyId, setSelectedPolicyId] = useState(routingPolicies[0]?.id ?? "");
+  const [maxCostTier, setMaxCostTier] = useState<ProviderCostTier>("unknown");
+  const [maxLatencyTier, setMaxLatencyTier] = useState<ProviderLatencyTier>("unknown");
+  const [allowExternalEgress, setAllowExternalEgress] = useState(true);
+  const [leftComparison, setLeftComparison] = useState("");
+  const [rightComparison, setRightComparison] = useState("");
+  const selectedPolicy = routingPolicies.find((policy) => policy.id === selectedPolicyId) ?? routingPolicies[0];
+  const simulation = useMemo(
+    () => selectedPolicy
+      ? simulateRouting(selectedPolicy, providers, { maxCostTier, maxLatencyTier, allowExternalEgress })
+      : null,
+    [selectedPolicy, providers, maxCostTier, maxLatencyTier, allowExternalEgress],
+  );
+  const outputComparison = useMemo(
+    () => compareReadOnlyOutputs(leftComparison, rightComparison),
+    [leftComparison, rightComparison],
+  );
+
   function toggleAgent(id: string) {
     setAgents(agents.map((agent) => (agent.id === id ? { ...agent, enabled: !agent.enabled } : agent)));
   }
@@ -3924,8 +4049,129 @@ function AgentsView({
     );
   }
 
+  function updateRoute(roleId: string, patch: Partial<RoutingPolicy["roleRoutes"][number]>) {
+    if (!selectedPolicy) return;
+    setRoutingPolicies(routingPolicies.map((policy) =>
+      policy.id === selectedPolicy.id
+        ? { ...policy, roleRoutes: policy.roleRoutes.map((route) => route.roleId === roleId ? { ...route, ...patch } : route) }
+        : policy,
+    ));
+  }
+
+  function applyRoutesToTeam() {
+    if (!selectedPolicy) return;
+    setAgents(agents.map((agent) => {
+      const route = selectedPolicy.roleRoutes.find((item) => item.roleId === agent.id);
+      if (!route) return agent;
+      const provider = providers.find((item) => item.id === route.primaryProviderId);
+      return {
+        ...agent,
+        providerId: route.primaryProviderId,
+        provider: provider?.name ?? route.primaryProviderId,
+        fallbackProviderIds: route.fallbackProviderIds,
+        mode: route.executionMode,
+        model: route.modelId ?? provider?.modelIds?.[0] ?? agent.model,
+      };
+    }));
+  }
+
   return (
-    <section className="agent-grid">
+    <section className="view-stack">
+      <Panel
+        title="Routing Simulator"
+        icon={GitBranch}
+        action={<button className="primary-btn compact-btn" onClick={applyRoutesToTeam} disabled={!selectedPolicy}>Apply to team</button>}
+      >
+        <div className="routing-controls">
+          <label>Routing policy
+            <select value={selectedPolicy?.id ?? ""} onChange={(event) => setSelectedPolicyId(event.target.value)}>
+              {routingPolicies.filter((policy) => policy.enabled).map((policy) => <option key={policy.id} value={policy.id}>{policy.name}</option>)}
+            </select>
+          </label>
+          <label>Maximum cost
+            <select value={maxCostTier} onChange={(event) => setMaxCostTier(event.target.value as ProviderCostTier)}>
+              {["free", "low", "medium", "high", "unknown"].map((tier) => <option key={tier}>{tier}</option>)}
+            </select>
+          </label>
+          <label>Maximum latency
+            <select value={maxLatencyTier} onChange={(event) => setMaxLatencyTier(event.target.value as ProviderLatencyTier)}>
+              {["local", "fast", "standard", "slow", "unknown"].map((tier) => <option key={tier}>{tier}</option>)}
+            </select>
+          </label>
+          <label className="routing-check"><input type="checkbox" checked={allowExternalEgress} onChange={(event) => setAllowExternalEgress(event.target.checked)} /> Allow external egress</label>
+        </div>
+        {simulation ? (
+          <>
+            <DecisionStrip items={[
+              { label: "Status", value: simulation.status, tone: simulation.status === "ready" ? "ok" : simulation.status === "blocked" ? "failed" : "warning" },
+              { label: "Cost", value: simulation.estimatedCostTier },
+              { label: "Latency", value: simulation.estimatedLatencyTier },
+              { label: "Egress", value: simulation.externalEgress ? "external" : "local", tone: simulation.externalEgress ? "warning" : "ok" },
+            ]} />
+            <div className="routing-simulation-list">
+              {simulation.roles.map((role) => (
+                <article className="routing-simulation-row" key={role.roleId}>
+                  <span className={`status-pill ${role.decision === "ready" ? "ok" : role.decision === "blocked" ? "failed" : "warning"}`}>{role.decision}</span>
+                  <strong>{role.roleId} → {role.selectedProviderId || "no route"}</strong>
+                  <div>
+                    {role.attempts.map((attempt) => (
+                      <small key={`${role.roleId}-${attempt.order}`}>
+                        {attempt.order + 1}. {attempt.providerId}: {attempt.status} — {attempt.reason}
+                      </small>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </>
+        ) : <p className="helper-text">No active routing policy.</p>}
+      </Panel>
+
+      {selectedPolicy ? (
+        <Panel title="Team Builder" icon={Bot}>
+          <p className="helper-text">Edit provider/fallback order by capability. The TaskContract keeps only the policy ID, so providers can be replaced without rewriting product scope.</p>
+          <div className="team-route-grid">
+            {selectedPolicy.roleRoutes.map((route) => (
+              <article className="team-route-card" key={route.roleId}>
+                <strong>{route.roleId}</strong>
+                <label>Primary provider
+                  <select value={route.primaryProviderId} onChange={(event) => updateRoute(route.roleId, { primaryProviderId: event.target.value })}>
+                    {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
+                  </select>
+                </label>
+                <label>Fallback order
+                  <input
+                    value={route.fallbackProviderIds.join(", ")}
+                    onChange={(event) => updateRoute(route.roleId, { fallbackProviderIds: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) })}
+                  />
+                </label>
+                <label>Execution mode
+                  <select value={route.executionMode} onChange={(event) => updateRoute(route.roleId, { executionMode: event.target.value as AgentExecutionMode })}>
+                    {["read_only", "write_workspace", "write_tests_only", "review_only", "command_runner", "approval_required"].map((mode) => <option key={mode}>{mode}</option>)}
+                  </select>
+                </label>
+                <div className="stack-row">{route.requiredCapabilities.map((capability) => <span key={capability}>{capability}</span>)}</div>
+              </article>
+            ))}
+          </div>
+        </Panel>
+      ) : null}
+
+      <Panel title="Compare read-only outputs" icon={ClipboardCheck}>
+        <div className="output-comparison-grid">
+          <label>Provider A output<textarea value={leftComparison} onChange={(event) => setLeftComparison(event.target.value)} placeholder="Paste a Kimi/Codex read-only result" /></label>
+          <label>Provider B output<textarea value={rightComparison} onChange={(event) => setRightComparison(event.target.value)} placeholder="Paste a Qwen/Claude read-only result" /></label>
+        </div>
+        <DecisionStrip items={[
+          { label: "Agreement", value: `${Math.round(outputComparison.agreement * 100)}%`, tone: outputComparison.agreement >= 0.5 ? "ok" : "warning" },
+          { label: "Shared", value: String(outputComparison.sharedTerms.length) },
+          { label: "A-only", value: String(outputComparison.leftOnly.length) },
+          { label: "B-only", value: String(outputComparison.rightOnly.length) },
+        ]} />
+        <p className="helper-text">Shared terms: {outputComparison.sharedTerms.join(", ") || "none yet"}. This lexical comparison is a review aid, not an acceptance verdict.</p>
+      </Panel>
+
+      <div className="agent-grid">
       {agents.map((agent) => (
         <article className={agent.enabled ? "agent-card" : "agent-card muted"} key={agent.id}>
           <div className="agent-card-head">
@@ -3990,6 +4236,7 @@ function AgentsView({
           </div>
         </article>
       ))}
+      </div>
     </section>
   );
 }
@@ -4825,7 +5072,17 @@ function ReportsView({
   const hasTaskSpec = Boolean((task?.specPath && task.specChecksum) || (latestContract?.artifactPath && latestContract.checksum));
   const hasMemoryFiles = state.memory.some((note) => Boolean(note.path && note.checksum));
   const taskCost = task ? state.costs.filter((event) => event.taskId === task.id).reduce((sum, event) => sum + event.amount, 0) : 0;
-  const evidenceReady = Boolean(latestPack && allStepsPassed && pendingApprovals.length === 0);
+  const executionIdentityMatches = Boolean(
+    latestPack &&
+      latestRun.executionIdentity.configChecksum &&
+      latestPack.executionIdentity.configChecksum === latestRun.executionIdentity.configChecksum,
+  );
+  const evidencePackVerified = Boolean(
+    latestPack && latestPack.schemaVersion >= 2 && latestPack.verification.complete === true,
+  );
+  const evidenceReady = Boolean(
+    latestPack && allStepsPassed && pendingApprovals.length === 0 && executionIdentityMatches && evidencePackVerified,
+  );
   const finalStatus = latestPack?.finalDecision || (evidenceReady ? "ready_for_decision" : "blocked");
   const canAccept = evidenceReady && !latestPack?.finalDecision;
   const missingEvidenceCount = [
@@ -4835,6 +5092,8 @@ function ReportsView({
     !hasStructuredReports,
     !hasTaskSpec,
     !latestPack,
+    !evidencePackVerified,
+    !executionIdentityMatches,
     pendingApprovals.length > 0,
   ].filter(Boolean).length;
   const acceptanceChecks = [
@@ -4845,6 +5104,24 @@ function ReportsView({
     { label: "Task spec persisted", ok: hasTaskSpec, detail: hasTaskSpec ? "Task spec has a path and checksum." : "Save the task spec or create a TaskContract artifact." },
     { label: "No pending approvals", ok: pendingApprovals.length === 0, detail: pendingApprovals.length === 0 ? "No approval is linked to this run." : `${pendingApprovals.length} approval request(s) are linked to this run.` },
     { label: "EvidencePack generated", ok: Boolean(latestPack), detail: latestPack ? latestPack.manifestPath : "Generate the proof package from this run." },
+    {
+      label: "EvidencePack v2 verified",
+      ok: evidencePackVerified,
+      detail: latestPack
+        ? evidencePackVerified
+          ? "Required contract, slice, run, and execution identity references are verified."
+          : "The pack is legacy or its required artifact verification is incomplete."
+        : "Generate the EvidencePack v2 manifest before acceptance.",
+    },
+    {
+      label: "Execution identity sealed",
+      ok: executionIdentityMatches,
+      detail: latestPack
+        ? executionIdentityMatches
+          ? `Run and EvidencePack share ${latestRun.executionIdentity.configChecksum}.`
+          : "Run and EvidencePack provider snapshots do not match."
+        : "Generate the EvidencePack to seal the provider and routing snapshot.",
+    },
   ];
   const report = useMemo(() => {
     if (!latestRun || !task) return "No current HarnessRun selected.";
@@ -4855,6 +5132,10 @@ function ReportsView({
       `Task status: ${task?.status ?? "draft"}`,
       `Task spec: ${hasTaskSpec ? `${task?.specPath}#${task?.specChecksum}` : "not persisted"}`,
       `HarnessRun: ${latestRun.id}`,
+      `Routing policy: ${latestRun.executionIdentity.routingPolicyId}`,
+      `Execution config checksum: ${latestRun.executionIdentity.configChecksum}`,
+      `Execution providers: ${latestRun.executionIdentity.providers.map((identity) => `${identity.roleId}=${identity.configuredProviderId}->${identity.providerId}/${identity.modelId}/${identity.adapterId}/${identity.runMode}`).join(", ") || "legacy snapshot unavailable"}`,
+      `MCP servers: ${latestRun.executionIdentity.mcpServerIds.join(", ") || "none"}`,
       `Loop manifest: ${scopedLoop?.manifestPath ?? latestRun.manifestPath}`,
       `Backend JSON report: ${scopedLoop?.reportJsonPath ?? (!isTauriRuntime() ? "not generated in safe preview" : "not generated")}`,
       `Backend Markdown report: ${scopedLoop?.reportMarkdownPath ?? (!isTauriRuntime() ? "not generated in safe preview" : "not generated")}`,
@@ -4862,6 +5143,11 @@ function ReportsView({
       `Commit proposal: ${scopedLoop?.commitProposalPath ?? (!isTauriRuntime() ? "not generated in safe preview" : "not generated")}`,
       `Security report: ${scopedLoop?.securityReportPath ?? (!isTauriRuntime() ? "represented by deterministic preview evidence" : "not generated")}`,
       `Harness EvidencePack: ${latestPack?.manifestPath ?? "not generated"}`,
+      `EvidencePack schema: ${latestPack?.schemaVersion ?? "not generated"}`,
+      `EvidencePack verification: ${latestPack?.verification.complete === true ? "complete" : "incomplete"}`,
+      `MCP activity: ${String(latestPack?.mcpActivity.status ?? "not recorded")}`,
+      `Routing activity: ${String(latestPack?.routingActivity.status ?? "not recorded")}`,
+      `Provider usage confidence: ${String(latestPack?.usage.confidence ?? "unknown")}`,
       `Harness final decision: ${latestPack?.finalDecision || "pending"}`,
       `Final status: ${finalStatus}`,
       `Cost: $${(isTauriRuntime() ? taskCost : 0).toFixed(2)}${isTauriRuntime() ? " for this task" : " safe preview"}`,
@@ -5033,6 +5319,14 @@ function ReportsView({
             <span>Task cost</span>
             <strong>${(isTauriRuntime() ? taskCost : 0).toFixed(2)}</strong>
           </div>
+          <div>
+            <span>Routing policy</span>
+            <strong>{latestRun.executionIdentity.routingPolicyId}</strong>
+          </div>
+          <div>
+            <span>Execution identity</span>
+            <strong>{latestRun.executionIdentity.configChecksum}</strong>
+          </div>
         </div>
       </Panel>
       <Panel title="Acceptance Checklist" icon={ListChecks}>
@@ -5057,6 +5351,9 @@ function ReportsView({
                 </span>
                 <strong>{latestPack.id}</strong>
                 <p>Decision: {latestPack.finalDecision || "pending"}</p>
+                <p>Execution identity: {latestPack.executionIdentity.configChecksum}</p>
+                <p>Schema: v{latestPack.schemaVersion} · Verification: {latestPack.verification.complete === true ? "complete" : "incomplete"}</p>
+                <p>MCP: {String(latestPack.mcpActivity.status ?? "not recorded")} · Usage: {String(latestPack.usage.confidence ?? "unknown")}</p>
                 <code>{latestPack.manifestPath}</code>
                 <code>{latestPack.reportPath}</code>
               </div>
@@ -5091,6 +5388,7 @@ function SettingsView({
   audit,
   costs,
   providerSessionReport,
+  activeRunId,
   onRefreshProviderSessionReport,
 }: {
   state: AppState;
@@ -5098,6 +5396,7 @@ function SettingsView({
   audit: AppState["audit"];
   costs: AppState["costs"];
   providerSessionReport: ProviderSessionReport | null;
+  activeRunId: string;
   onRefreshProviderSessionReport: () => void;
 }) {
   const [draft, setDraft] = useState({
@@ -5111,6 +5410,27 @@ function SettingsView({
   const [policyProbe, setPolicyProbe] = useState("git status --short");
   const [policyProbeResult, setPolicyProbeResult] = useState<"allow" | "approval" | "deny" | "">("");
   const [contractDiagnostics, setContractDiagnostics] = useState<ProjectConfigDiagnostic[]>([]);
+  const [mcpDraft, setMcpDraft] = useState<{
+    name: string;
+    transport: McpTransport;
+    command: string;
+    args: string;
+    url: string;
+    authMode: McpServerConnection["authMode"];
+    secretRef: string;
+    toolPolicyId: string;
+  }>({
+    name: "Workspace MCP",
+    transport: "stdio",
+    command: "",
+    args: "",
+    url: "",
+    authMode: "none",
+    secretRef: "",
+    toolPolicyId: state.toolPolicies[0]?.id ?? "mcp-read-only",
+  });
+  const [mcpDraftMessage, setMcpDraftMessage] = useState("");
+  const [mcpChecks, setMcpChecks] = useState<Record<string, McpConnectionCheckResult>>({});
   const activeProject = state.projects.find((project) => project.id === state.activeProjectId) ?? state.projects[0];
 
   function updateProvider(id: string, patch: Partial<Provider>) {
@@ -5119,6 +5439,167 @@ function SettingsView({
       const agents = syncAssignedRoles(providers, current.agents);
       return { ...current, providers: syncProvidersWithAgents(providers, agents), agents };
     });
+  }
+
+  function updateMcpConnection(id: string, patch: Partial<McpServerConnection>) {
+    setState((current) => ({
+      ...current,
+      mcpServers: current.mcpServers.map((connection) =>
+        connection.id === id ? normalizeMcpConnection({ ...connection, ...patch }) : connection,
+      ),
+    }));
+  }
+
+  function addMcpConnection() {
+    const connection = normalizeMcpConnection({
+      id: uid("mcp").toLowerCase(),
+      name: mcpDraft.name.trim() || "MCP Server",
+      transport: mcpDraft.transport,
+      command: mcpDraft.command.trim(),
+      args: parseCliArgsTemplate(mcpDraft.args, ""),
+      url: mcpDraft.url.trim(),
+      authMode: mcpDraft.authMode,
+      secretRef: mcpDraft.secretRef.trim(),
+      toolPolicyId: mcpDraft.toolPolicyId,
+      enabled: false,
+      health: "unknown",
+    });
+    const validation = validateMcpConnection(connection);
+    if (!validation.valid) {
+      setMcpDraftMessage(validation.errors.join(" "));
+      return;
+    }
+    setState((current) => ({
+      ...current,
+      mcpServers: [...current.mcpServers, connection],
+      audit: [
+        {
+          id: uid("AUD"),
+          time: currentTime(),
+          actor: "MCP Connection Center",
+          action: "Connection added",
+          result: `${connection.name}; ${connection.transport}; disabled until discovery passes.`,
+        },
+        ...current.audit,
+      ],
+    }));
+    setMcpDraftMessage(validation.warnings.join(" "));
+    setMcpDraft({
+      name: "Workspace MCP",
+      transport: "stdio",
+      command: "",
+      args: "",
+      url: "",
+      authMode: "none",
+      secretRef: "",
+      toolPolicyId: state.toolPolicies[0]?.id ?? "mcp-read-only",
+    });
+  }
+
+  async function checkMcpServer(connection: McpServerConnection) {
+    const result = await testMcpConnection(connection);
+    setMcpChecks((current) => ({ ...current, [connection.id]: result }));
+    setState((current) => ({
+      ...current,
+      mcpServers: current.mcpServers.map((item) =>
+        item.id === connection.id
+          ? normalizeMcpConnection({
+              ...item,
+              enabled: result.status === "ok" ? item.enabled : false,
+              health: result.status,
+              command: result.resolvedCommand || item.command,
+              protocolVersion: result.protocolVersion,
+              serverVersion: result.serverVersion,
+              discoveredTools: result.tools,
+              oauthStatus: item.authMode === "oauth" && result.authStatus === "present" ? "connected" : item.oauthStatus,
+              lastCheckedAt: currentTime(),
+              lastCheckResult: result.detail,
+              recoveryAction: result.recoveryAction,
+            })
+          : item,
+      ),
+      audit: [
+        {
+          id: uid("AUD"),
+          time: currentTime(),
+          actor: "MCP Connection Center",
+          action: "Discovery check",
+          result: `${connection.name}: ${result.status}; ${result.tools.length} tool(s); ${result.protocolVersion || "no protocol"}.`,
+        },
+        ...current.audit,
+      ],
+    }));
+  }
+
+  function removeMcpServer(id: string) {
+    setState((current) => ({
+      ...current,
+      mcpServers: current.mcpServers.filter((connection) => connection.id !== id),
+    }));
+    setMcpChecks((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== id)));
+  }
+
+  function updateToolPolicy(id: string, patch: Partial<AppState["toolPolicies"][number]>) {
+    setState((current) => ({
+      ...current,
+      toolPolicies: current.toolPolicies.map((policy) => (policy.id === id ? { ...policy, ...patch } : policy)),
+    }));
+  }
+
+  function requestMcpApproval(connection: McpServerConnection, tool: McpServerConnection["discoveredTools"][number]) {
+    if (!activeRunId) {
+      setMcpDraftMessage("Start a bounded Run before requesting a run-scoped MCP approval.");
+      return;
+    }
+    const id = `MCP-${activeRunId}-${connection.id}-${tool.name}`.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 140);
+    const risk: RiskLevel = tool.intent === "destructive" ? "critical" : tool.intent === "network" || tool.intent === "unknown" ? "high" : "medium";
+    setState((current) => {
+      const approval: ApprovalRequest = {
+        id,
+        kind: "mcp_tool_call",
+        runId: activeRunId,
+        connectionId: connection.id,
+        toolName: tool.name,
+        approvalScope: "run",
+        action: `Allow MCP tool ${tool.name} for this run`,
+        reason: `Policy ${connection.toolPolicyId} requires a run-scoped human decision for ${tool.intent} intent.`,
+        requester: "MCP Policy Proxy",
+        risk,
+        preview: "Approval is limited to this run, connection, and tool. Arguments are evaluated separately and never stored raw.",
+        artifactPath: activeProject?.path ? `${activeProject.path}/.dbc/approvals/mcp/${activeRunId}.json` : "",
+        createdAt: new Date().toISOString(),
+        status: "pending",
+      };
+      return {
+        ...current,
+        approvals: current.approvals.some((item) => item.id === id)
+          ? current.approvals.map((item) => item.id === id ? { ...item, status: "pending" } : item)
+          : [approval, ...current.approvals],
+        audit: [{ id: uid("AUD"), time: currentTime(), actor: "MCP Policy Proxy", action: "Run approval requested", result: `${tool.name} via ${connection.name}` }, ...current.audit],
+      };
+    });
+    setMcpDraftMessage(`Approval request for ${tool.name} is available under Approvals.`);
+  }
+
+  async function importModelCatalog(file: File | undefined) {
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      const models = Array.isArray(parsed)
+        ? parsed
+        : parsed && typeof parsed === "object" && Array.isArray((parsed as { models?: unknown[] }).models)
+          ? (parsed as { models: AppState["modelCatalog"] }).models
+          : [];
+      if (!models.length) throw new Error("Catalog JSON must be an array or an object with a models array.");
+      setState((current) => ({
+        ...current,
+        modelCatalog: mergeVerifiedModelCatalog(current.modelCatalog, models as AppState["modelCatalog"]),
+        audit: [{ id: uid("AUD"), time: currentTime(), actor: "Model Catalog", action: "Verified catalog imported", result: `${file.name}: ${models.length} entries submitted.` }, ...current.audit],
+      }));
+      setContractDiagnostics([{ level: "info", subject: "model-catalog", detail: `Imported verified entries from ${file.name}. Invalid or unsourced entries were ignored.` }]);
+    } catch (error) {
+      setContractDiagnostics([{ level: "error", subject: "model-catalog", detail: error instanceof Error ? error.message : String(error) }]);
+    }
   }
 
   function applyProviderPreset(presetId: string) {
@@ -5153,22 +5634,36 @@ function SettingsView({
 
   function addProvider() {
     if (!draft.name.trim() || !draft.command.trim()) return;
-    const provider: Provider = {
+    const adapter = adapterForCommand(draft.command);
+    const provider = normalizeProviderConfig({
       id: uid("provider").toLowerCase(),
       name: draft.name.trim(),
+      vendor: adapter.vendor,
+      adapterId: adapter.id,
+      invocationProfileId: adapter.invocationProfileId,
+      featureFlag: adapter.featureFlag,
       type: "cli",
-      enabled: true,
+      enabled: !adapter.featureFlag,
       health: "unknown",
       command: draft.command.trim(),
-      argsTemplate: draft.argsTemplate.trim(),
+      argsTemplate: draft.argsTemplate.trim() || adapter.defaultArgsTemplate,
       versionArgs: draft.versionArgs.trim() || "--version",
-      promptMode: "stdin",
+      promptMode: adapter.defaultPromptMode,
       runMode: "mock",
       timeoutSeconds: 900,
       maxOutputBytes: 200000,
-      capabilities: ["structured_output"],
+      capabilities: adapter.featureFlag
+        ? ["plan", "review_diff", "analyze_logs", "structured_output"]
+        : ["structured_output"],
+      modelIds: [],
       assignedRoles: [],
-    };
+      compatibilityStatus: "unknown",
+      authStatus: "unknown",
+      readOnlyReady: false,
+      recoveryAction: adapter.featureFlag
+        ? "Run Test CLI and Check contract before enabling this provider."
+        : "Run Test CLI and Check contract.",
+    });
     setState((current) => ({
       ...current,
       providers: [...current.providers, provider],
@@ -5187,11 +5682,17 @@ function SettingsView({
   }
 
   async function testProvider(provider: Provider) {
-    const result = await testCliProvider(provider);
+    const result = provider.type === "api" ? await testApiProviderContract(provider) : await testCliProvider(provider);
     updateProvider(provider.id, {
       health: result.status,
+      command: result.resolvedCommand || provider.command,
       lastTestAt: currentTime(),
       lastTestResult: `${result.detail}${result.versionOutput ? ` ${result.versionOutput}` : ""}`,
+      detectedVersion: result.detectedVersion,
+      compatibilityStatus: result.compatibilityStatus,
+      authStatus: result.authStatus,
+      readOnlyReady: result.readOnlyReady,
+      recoveryAction: result.recoveryAction,
     });
     setState((current) => ({
       ...current,
@@ -5303,12 +5804,19 @@ function SettingsView({
 
   async function syncProjectConfig() {
     if (!activeProject) return;
-    const result = await saveProjectConfig(activeProject.path, state.providers, state.commandPolicy);
+    const result = await saveProjectConfig(
+      activeProject.path,
+      state.providers,
+      state.commandPolicy,
+      state.mcpServers,
+      state.toolPolicies,
+      state.modelCatalog,
+    );
     setContractDiagnostics([
       {
         level: "info",
         subject: "project-contract",
-        detail: `Saved ${result.providers.path} and ${result.policy.path}.`,
+        detail: `Saved providers, command policy, MCP connections, tool policies, and model catalog under ${activeProject.path}/.dbc.`,
       },
     ]);
     setState((current) => ({
@@ -5319,7 +5827,7 @@ function SettingsView({
           time: currentTime(),
           actor: "Config Sync",
           action: ".dbc contract saved",
-          result: `${result.providers.path}#${result.providers.checksum}; ${result.policy.path}#${result.policy.checksum}`,
+          result: `${result.providers.path}#${result.providers.checksum}; ${result.policy.path}#${result.policy.checksum}; ${result.mcpConnections.path}#${result.mcpConnections.checksum}; ${result.toolPolicies.path}#${result.toolPolicies.checksum}; ${result.modelCatalog.path}#${result.modelCatalog.checksum}`,
         },
         ...current.audit,
       ],
@@ -5340,13 +5848,16 @@ function SettingsView({
         providers: shouldApplyProviders ? syncProvidersWithAgents(providers, agents) : current.providers,
         agents,
         commandPolicy: result.policyRecord ? result.commandPolicy : current.commandPolicy,
+        mcpServers: result.mcpConnectionsRecord ? result.mcpServers : current.mcpServers,
+        toolPolicies: result.toolPoliciesRecord ? result.toolPolicies : current.toolPolicies,
+        modelCatalog: result.modelCatalogRecord ? mergeVerifiedModelCatalog(current.modelCatalog, result.modelCatalog) : current.modelCatalog,
         audit: [
           {
             id: uid("AUD"),
             time: currentTime(),
             actor: "Config Sync",
             action: ".dbc contract loaded",
-            result: `${result.providersRecord?.path ?? "providers missing"}; ${result.policyRecord?.path ?? "policy missing"}; ${result.diagnostics.length} diagnostic(s).`,
+            result: `${result.providersRecord?.path ?? "providers missing"}; ${result.policyRecord?.path ?? "policy missing"}; ${result.mcpConnectionsRecord?.path ?? "mcp missing"}; ${result.toolPoliciesRecord?.path ?? "tool policies missing"}; ${result.modelCatalogRecord?.path ?? "catalog missing"}; ${result.diagnostics.length} diagnostic(s).`,
           },
           ...current.audit,
         ],
@@ -5402,13 +5913,34 @@ function SettingsView({
   const routingDiagnostics = buildProviderRoutingDiagnostics(state.agents, state.providers);
   const codexProvider = state.providers.find((provider) => provider.name.toLowerCase().includes("codex"));
   const claudeProvider = state.providers.find((provider) => provider.name.toLowerCase().includes("claude"));
+  const kimiProvider = state.providers.find((provider) => provider.adapterId?.startsWith("kimi/") || provider.name.toLowerCase().includes("kimi"));
+  const qwenProvider = state.providers.find((provider) => provider.adapterId?.startsWith("qwen/") || provider.name.toLowerCase().includes("qwen"));
   const localRunner = state.providers.find((provider) => provider.type === "local_runner");
   const realProviders = state.providers.filter((provider) => provider.type === "cli" && provider.runMode === "real");
   const mockProvider = state.providers.find((provider) => provider.type === "mock" && provider.enabled);
   const safeMockReady = Boolean(mockProvider && localRunner?.enabled && localRunner.health === "ok");
+  const readyMcpServers = state.mcpServers.filter((connection) => connection.enabled && connection.health === "ok");
 
   return (
     <section className="view-stack">
+      <Panel title="Privacy and diagnostics" icon={ShieldCheck}>
+        <div className="provider-template-picker">
+          <div>
+            <strong>{state.telemetryEnabled ? "Local diagnostics enabled" : "Telemetry is off by default"}</strong>
+            <p>
+              DBC does not transmit analytics in this build. Opting in only preserves anonymous diagnostic counters locally so a future exporter still requires a separate endpoint and approval.
+            </p>
+          </div>
+          <label className="switch-row">
+            <input
+              type="checkbox"
+              checked={state.telemetryEnabled}
+              onChange={(event) => setState((current) => ({ ...current, telemetryEnabled: event.target.checked }))}
+            />
+            Store anonymous diagnostics locally
+          </label>
+        </div>
+      </Panel>
       <Panel
         title="Quick Setup"
         icon={Gauge}
@@ -5438,6 +5970,9 @@ function SettingsView({
             { label: "Mode", value: safeMockReady ? "safe mock" : "not ready", tone: safeMockReady ? "ok" : "warning" },
             { label: "Codex detected", value: codexProvider?.health === "ok" ? "yes" : "no", tone: codexProvider?.health === "ok" ? "ok" : "warning" },
             { label: "Claude detected", value: claudeProvider?.health === "ok" ? "yes" : "no", tone: claudeProvider?.health === "ok" ? "ok" : "warning" },
+            { label: "Kimi read-only", value: kimiProvider?.readOnlyReady ? "ready" : kimiProvider ? "blocked" : "not added", tone: kimiProvider?.readOnlyReady ? "ok" : "warning" },
+            { label: "Qwen read-only", value: qwenProvider?.readOnlyReady ? "ready" : qwenProvider ? "check setup" : "not added", tone: qwenProvider?.readOnlyReady ? "ok" : "warning" },
+            { label: "MCP", value: readyMcpServers.length ? `${readyMcpServers.length} ready` : "isolated", tone: readyMcpServers.length ? "ok" : "warning" },
             { label: "Real execution", value: realProviders.length ? "enabled" : "off (safe)", tone: realProviders.length ? "warning" : "ok" },
           ]}
         />
@@ -5503,6 +6038,260 @@ function SettingsView({
             </div>
           </div>
 
+      <Panel title="MCP Connection Center" icon={Boxes}>
+        <div className="provider-template-picker">
+          <div>
+            <strong>Isolated by default</strong>
+            <p>Connections start disabled. Discovery never executes a tool, and credentials are stored only as OS secret references.</p>
+          </div>
+          <span className={`status-pill ${readyMcpServers.length ? "ok" : "warning"}`}>
+            {readyMcpServers.length} ready / {state.mcpServers.length} configured
+          </span>
+        </div>
+        <div className="mcp-form">
+          <label>
+            Name
+            <input value={mcpDraft.name} onChange={(event) => setMcpDraft({ ...mcpDraft, name: event.target.value })} />
+          </label>
+          <label>
+            Transport
+            <select
+              value={mcpDraft.transport}
+              onChange={(event) => setMcpDraft({ ...mcpDraft, transport: event.target.value as McpTransport })}
+            >
+              <option value="stdio">stdio</option>
+              <option value="streamable_http">Streamable HTTP</option>
+              <option value="sse_legacy">SSE (legacy import)</option>
+            </select>
+          </label>
+          {mcpDraft.transport === "stdio" ? (
+            <>
+              <label>
+                Server command
+                <input
+                  value={mcpDraft.command}
+                  onChange={(event) => setMcpDraft({ ...mcpDraft, command: event.target.value })}
+                  placeholder="npx"
+                />
+              </label>
+              <label>
+                Arguments
+                <input
+                  value={mcpDraft.args}
+                  onChange={(event) => setMcpDraft({ ...mcpDraft, args: event.target.value })}
+                  placeholder="-y @modelcontextprotocol/server-filesystem /workspace"
+                />
+              </label>
+            </>
+          ) : (
+            <label className="field-span-2">
+              Endpoint URL
+              <input
+                value={mcpDraft.url}
+                onChange={(event) => setMcpDraft({ ...mcpDraft, url: event.target.value })}
+                placeholder="https://mcp.example.com/mcp"
+              />
+            </label>
+          )}
+          <label>
+            Authentication
+            <select
+              value={mcpDraft.authMode}
+              onChange={(event) => setMcpDraft({ ...mcpDraft, authMode: event.target.value as McpServerConnection["authMode"] })}
+            >
+              <option value="none">None</option>
+              <option value="oauth">OAuth</option>
+              <option value="secret_ref">Secret reference</option>
+            </select>
+          </label>
+          <label>
+            Secret reference
+            <input
+              value={mcpDraft.secretRef}
+              disabled={mcpDraft.authMode !== "secret_ref"}
+              onChange={(event) => setMcpDraft({ ...mcpDraft, secretRef: event.target.value })}
+              placeholder="keychain:dbc-mcp/account"
+              autoComplete="off"
+            />
+          </label>
+          <label>
+            Tool policy
+            <select
+              value={mcpDraft.toolPolicyId}
+              onChange={(event) => setMcpDraft({ ...mcpDraft, toolPolicyId: event.target.value })}
+            >
+              {state.toolPolicies.filter((policy) => policy.enabled).map((policy) => (
+                <option value={policy.id} key={policy.id}>{policy.name}</option>
+              ))}
+            </select>
+          </label>
+          <button className="primary-btn mcp-add-button" onClick={addMcpConnection}>
+            <Plus size={16} /> Add isolated connection
+          </button>
+        </div>
+        {mcpDraftMessage ? <p className="provider-recovery">{mcpDraftMessage}</p> : null}
+
+        {state.mcpServers.length ? (
+          <div className="mcp-grid">
+            {state.mcpServers.map((connection) => {
+              const policy = state.toolPolicies.find((item) => item.id === connection.toolPolicyId);
+              const check = mcpChecks[connection.id];
+              const validation = validateMcpConnection(connection);
+              return (
+                <article className="provider-card mcp-card" key={connection.id}>
+                  <div className="provider-head">
+                    <div>
+                      <strong>{connection.name}</strong>
+                      <span>{connection.transport} · {connection.protocolVersion || "not negotiated"}</span>
+                    </div>
+                    <span className={`status-pill ${connection.health}`}>{connection.health}</span>
+                  </div>
+                  <div className="mcp-facts">
+                    <div><span>Endpoint</span><strong>{connection.transport === "stdio" ? [connection.command, ...connection.args].join(" ") : connection.url}</strong></div>
+                    <div><span>Policy</span><strong>{policy?.name ?? "missing"}</strong></div>
+                    <div><span>Auth</span><strong>{connection.authMode === "none" ? "not required" : connection.oauthStatus}</strong></div>
+                    <div><span>Tools</span><strong>{connection.discoveredTools.length}</strong></div>
+                  </div>
+                  {!validation.valid ? <p className="provider-recovery">{validation.errors.join(" ")}</p> : null}
+                  {connection.lastCheckResult ? <p className="helper-text">{connection.lastCheckResult}</p> : null}
+                  {connection.discoveredTools.length ? (
+                    <div className="mcp-tool-list" aria-label={`${connection.name} discovered tools`}>
+                      {connection.discoveredTools.slice(0, 12).map((tool) => {
+                        const evaluation = policy ? evaluateMcpTool(policy, tool) : { decision: "deny" as const, reason: "Policy is missing." };
+                        return (
+                          <div className="mcp-tool-row" key={tool.name}>
+                            <span className={`status-pill ${evaluation.decision}`}>{evaluation.decision}</span>
+                            <strong>{tool.name}</strong>
+                            <small>{tool.intent} · {evaluation.reason}</small>
+                            {evaluation.decision === "approval_required" ? (
+                              <button className="ghost-btn compact-btn" onClick={() => requestMcpApproval(connection, tool)}>
+                                Request approval
+                              </button>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : <p className="helper-text">No tools discovered. Run discovery before enabling.</p>}
+                  {check?.diagnostics.length ? (
+                    <div className="audit-list compact-list">
+                      {check.diagnostics.slice(0, 6).map((diagnostic, index) => (
+                        <div className="audit-row" key={`${connection.id}-${diagnostic.subject}-${index}`}>
+                          <span className={`status-pill ${diagnostic.level === "error" ? "failed" : diagnostic.level === "warning" ? "warning" : "ok"}`}>{diagnostic.level}</span>
+                          <strong>{diagnostic.subject}</strong>
+                          <p>{diagnostic.detail}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="button-row">
+                    <button className="ghost-btn" onClick={() => checkMcpServer(connection)} disabled={!validation.valid}>
+                      <Gauge size={16} /> Discover safely
+                    </button>
+                    <button
+                      className="ghost-btn"
+                      onClick={() => updateMcpConnection(connection.id, { enabled: !connection.enabled })}
+                      disabled={connection.health !== "ok"}
+                      title={connection.health !== "ok" ? "A successful discovery check is required." : undefined}
+                    >
+                      {connection.enabled ? "Disable" : "Enable"}
+                    </button>
+                    <button className="ghost-btn" onClick={() => removeMcpServer(connection.id)}>Remove</button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="empty-state mcp-empty">
+            <strong>No MCP servers connected</strong>
+            <p>Add a stdio or Streamable HTTP contract. DBC will keep it isolated until schema discovery and policy review pass.</p>
+          </div>
+        )}
+      </Panel>
+
+      <Panel title="MCP Tool Policies" icon={ShieldCheck}>
+        <div className="mcp-policy-grid">
+          {state.toolPolicies.map((policy) => (
+            <article className="policy-editor" key={policy.id}>
+              <div className="provider-head">
+                <div><strong>{policy.name}</strong><span>{policy.trustTemplate}</span></div>
+                <span className={`status-pill ${policy.enabled ? "ok" : "warning"}`}>{policy.enabled ? "active" : "disabled"}</span>
+              </div>
+              <p>{policy.description}</p>
+              <div className="policy-decision-grid">
+                <label>Writes
+                  <select value={policy.writeDecision} onChange={(event) => updateToolPolicy(policy.id, { writeDecision: event.target.value as typeof policy.writeDecision })}>
+                    <option value="allow">Allow</option><option value="approval_required">Approval</option><option value="deny">Deny</option>
+                  </select>
+                </label>
+                <label>Network
+                  <select value={policy.networkDecision} onChange={(event) => updateToolPolicy(policy.id, { networkDecision: event.target.value as typeof policy.networkDecision })}>
+                    <option value="allow">Allow</option><option value="approval_required">Approval</option><option value="deny">Deny</option>
+                  </select>
+                </label>
+                <label>Destructive
+                  <select value={policy.destructiveDecision} onChange={(event) => updateToolPolicy(policy.id, { destructiveDecision: event.target.value as typeof policy.destructiveDecision })}>
+                    <option value="approval_required">Approval</option><option value="deny">Deny</option>
+                  </select>
+                </label>
+                <label>Calls / run
+                  <input type="number" min={1} max={1000} value={policy.maxCallsPerRun} onChange={(event) => updateToolPolicy(policy.id, { maxCallsPerRun: Number(event.target.value) || 1 })} />
+                </label>
+              </div>
+              <label>Allowed paths
+                <textarea value={policy.allowedPaths.join("\n")} onChange={(event) => updateToolPolicy(policy.id, { allowedPaths: lines(event.target.value) })} />
+              </label>
+              <label>Denied paths
+                <textarea value={policy.deniedPaths.join("\n")} onChange={(event) => updateToolPolicy(policy.id, { deniedPaths: lines(event.target.value) })} />
+              </label>
+              <div className="check-row">
+                <label><input type="checkbox" checked={policy.allowNetwork} onChange={(event) => updateToolPolicy(policy.id, { allowNetwork: event.target.checked })} /> Network capable</label>
+                <label><input type="checkbox" checked={policy.allowSensitiveData} onChange={(event) => updateToolPolicy(policy.id, { allowSensitiveData: event.target.checked })} /> Sensitive reads</label>
+                <label><input type="checkbox" checked={policy.enabled} onChange={(event) => updateToolPolicy(policy.id, { enabled: event.target.checked })} /> Policy active</label>
+              </div>
+            </article>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel
+        title="API Model Catalog"
+        icon={Brain}
+        action={
+          <label className="ghost-btn compact-btn catalog-import">
+            <Plus size={16} /> Import verified JSON
+            <input type="file" accept="application/json,.json" onChange={(event) => void importModelCatalog(event.target.files?.[0])} />
+          </label>
+        }
+      >
+        <div className="provider-template-picker">
+          <div>
+            <strong>Refreshable provider contracts</strong>
+            <p>Catalog entries keep source and verification dates. Prices remain unknown until an explicit verified price snapshot is imported.</p>
+          </div>
+          <span className="status-pill ok">{state.modelCatalog.length} verified entries</span>
+        </div>
+        <div className="model-catalog-grid">
+          {state.modelCatalog.map((model) => (
+            <article className="model-card" key={`${model.providerId}-${model.id}`}>
+              <div className="provider-head">
+                <div><strong>{model.displayName}</strong><span>{model.providerId} · {model.status}</span></div>
+                <span className={`status-pill ${model.status === "deprecated" ? "failed" : model.status === "preview" ? "warning" : "ok"}`}>{model.status}</span>
+              </div>
+              <div className="mcp-facts">
+                <div><span>Context</span><strong>{model.contextWindow ? model.contextWindow.toLocaleString() : "verify with provider"}</strong></div>
+                <div><span>Residency</span><strong>{model.dataResidency}</strong></div>
+                <div><span>Cost tier</span><strong>{model.costTier}</strong></div>
+                <div><span>Verified</span><strong>{model.verifiedAt}</strong></div>
+              </div>
+              <div className="stack-row">{model.capabilities.slice(0, 8).map((capability) => <span key={capability}>{capability}</span>)}</div>
+              <a className="catalog-source" href={model.sourceUrl} target="_blank" rel="noreferrer">Official source</a>
+            </article>
+          ))}
+        </div>
+      </Panel>
+
       <Panel title="Provider Routing" icon={GitBranch}>
         <div className="audit-list">
           {routingDiagnostics.map((item) => (
@@ -5542,6 +6331,32 @@ function SettingsView({
       </Panel>
 
       <Panel title="Add CLI Provider" icon={KeyRound}>
+        <div className="provider-template-picker" aria-label="Official provider templates">
+          <div>
+            <strong>Official read-only templates</strong>
+            <p>Templates start disabled and in mock mode. Test version, auth, and contract before enabling.</p>
+          </div>
+          <div className="button-row">
+            <button
+              className="ghost-btn compact-btn"
+              onClick={() => {
+                const adapter = adapterForCommand("kimi");
+                setDraft({ name: adapter.displayName, command: "kimi", argsTemplate: adapter.defaultArgsTemplate, versionArgs: adapter.versionArgs });
+              }}
+            >
+              Kimi template
+            </button>
+            <button
+              className="ghost-btn compact-btn"
+              onClick={() => {
+                const adapter = adapterForCommand("qwen");
+                setDraft({ name: adapter.displayName, command: "qwen", argsTemplate: adapter.defaultArgsTemplate, versionArgs: adapter.versionArgs });
+              }}
+            >
+              Qwen template
+            </button>
+          </div>
+        </div>
         <div className="provider-form">
           <label>
             Name
@@ -5649,40 +6464,69 @@ function SettingsView({
               {diagnostics.contractWarnings.length ? `; ${diagnostics.contractWarnings.join("; ")}` : ""}
             </p>
             <div className="field-stack">
-              <label>
-                Command
-                <input
-                  value={provider.command}
-                  disabled={provider.type === "mock" || provider.type === "local_runner"}
-                  onChange={(event) => updateProvider(provider.id, { command: event.target.value })}
-                />
-              </label>
-              <label>
-                Args template
-                <input
-                  value={provider.argsTemplate}
-                  disabled={provider.type === "mock" || provider.type === "local_runner"}
-                  onChange={(event) => updateProvider(provider.id, { argsTemplate: event.target.value })}
-                />
-              </label>
-              <label>
-                Prompt mode
-                <select
-                  value={provider.promptMode}
-                  disabled={provider.type === "mock" || provider.type === "local_runner"}
-                  onChange={(event) => updateProvider(provider.id, { promptMode: event.target.value as Provider["promptMode"] })}
-                >
-                  <option value="stdin">stdin</option>
-                  <option value="arg">arg</option>
-                  <option value="file">file</option>
-                  <option value="terminal">terminal</option>
-                </select>
-              </label>
+              {provider.type === "api" ? (
+                <>
+                  <label>
+                    HTTPS endpoint
+                    <input value={provider.endpointUrl ?? ""} onChange={(event) => updateProvider(provider.id, { endpointUrl: event.target.value })} placeholder="https://…/compatible-mode/v1" />
+                  </label>
+                  <label>
+                    Keychain reference
+                    <input value={provider.secretRef ?? ""} onChange={(event) => updateProvider(provider.id, { secretRef: event.target.value })} placeholder="keychain:dbc-qwen/account" autoComplete="off" />
+                  </label>
+                  <label>
+                    Model
+                    <select value={provider.modelIds?.[0] ?? ""} onChange={(event) => updateProvider(provider.id, { modelIds: [event.target.value] })}>
+                      {state.modelCatalog.filter((model) => model.providerId === provider.id).map((model) => <option key={model.id} value={model.id}>{model.displayName}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    Region / residency
+                    <input value={provider.region ?? ""} onChange={(event) => updateProvider(provider.id, { region: event.target.value, dataResidency: event.target.value === "local" ? "local" : provider.dataResidency })} placeholder="cn-beijing / Singapore / global" />
+                  </label>
+                  {(() => {
+                    const apiValidation = validateApiProvider(provider, state.modelCatalog);
+                    return <p className={`provider-recovery ${apiValidation.valid ? "api-valid" : ""}`}>{apiValidation.valid ? apiValidation.warnings.join(" ") || "API contract fields are valid; no request sent." : apiValidation.errors.join(" ")}</p>;
+                  })()}
+                </>
+              ) : (
+                <>
+                  <label>
+                    Command
+                    <input
+                      value={provider.command}
+                      disabled={provider.type === "mock" || provider.type === "local_runner"}
+                      onChange={(event) => updateProvider(provider.id, { command: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Args template
+                    <input
+                      value={provider.argsTemplate}
+                      disabled={provider.type === "mock" || provider.type === "local_runner"}
+                      onChange={(event) => updateProvider(provider.id, { argsTemplate: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Prompt mode
+                    <select
+                      value={provider.promptMode}
+                      disabled={provider.type === "mock" || provider.type === "local_runner"}
+                      onChange={(event) => updateProvider(provider.id, { promptMode: event.target.value as Provider["promptMode"] })}
+                    >
+                      <option value="stdin">stdin</option>
+                      <option value="arg">arg</option>
+                      <option value="file">file</option>
+                      <option value="terminal">terminal</option>
+                    </select>
+                  </label>
+                </>
+              )}
               <label>
                 Run mode
                 <select
                   value={provider.runMode}
-                  disabled={provider.type === "mock"}
+                  disabled={provider.type === "mock" || (provider.type === "api" && !provider.readOnlyReady)}
                   onChange={(event) => updateProvider(provider.id, { runMode: event.target.value as ProviderRunMode })}
                 >
                   <option value="mock">mock</option>
@@ -5703,6 +6547,27 @@ function SettingsView({
               </div>
             ) : null}
             <p className="helper-text">{provider.lastTestResult ?? "Not tested yet."}</p>
+            {provider.compatibilityStatus || provider.authStatus ? (
+              <div className="provider-readiness" aria-label={`${provider.name} readiness`}>
+                <div>
+                  <span>Version</span>
+                  <strong>{provider.detectedVersion || "not detected"}</strong>
+                </div>
+                <div>
+                  <span>Compatibility</span>
+                  <strong>{displayValue(provider.compatibilityStatus)}</strong>
+                </div>
+                <div>
+                  <span>Auth</span>
+                  <strong>{displayValue(provider.authStatus)}</strong>
+                </div>
+                <div>
+                  <span>Read-only</span>
+                  <strong>{provider.readOnlyReady ? "ready" : "blocked"}</strong>
+                </div>
+              </div>
+            ) : null}
+            {provider.recoveryAction ? <p className="provider-recovery">Next: {provider.recoveryAction}</p> : null}
             {provider.lastContractCheckResult ? (
               <p className="helper-text">
                 Contract: {provider.lastContractCheckResult}
@@ -5746,19 +6611,24 @@ function SettingsView({
               <p className="helper-text">No CLI candidates found. Paste the exact executable path.</p>
             ) : null}
             <div className="button-row">
-              <button className="ghost-btn" onClick={() => detectProvider(provider)} disabled={provider.type === "mock" || provider.type === "local_runner"}>
+              <button className="ghost-btn" onClick={() => detectProvider(provider)} disabled={provider.type === "mock" || provider.type === "local_runner" || provider.type === "api"}>
                 <Gauge size={16} />
                 Auto-detect
               </button>
               <button className="ghost-btn" onClick={() => testProvider(provider)}>
                 <TerminalSquare size={16} />
-                Test CLI
+                {provider.type === "api" ? "Test API contract" : "Test CLI"}
               </button>
-              <button className="ghost-btn" onClick={() => checkProviderContract(provider)} disabled={provider.type === "mock" || provider.type === "local_runner"}>
+              <button className="ghost-btn" onClick={() => checkProviderContract(provider)} disabled={provider.type === "mock" || provider.type === "local_runner" || provider.type === "api"}>
                 <ListChecks size={16} />
                 Check contract
               </button>
-              <button className="ghost-btn" onClick={() => updateProvider(provider.id, { enabled: !provider.enabled })}>
+              <button
+                className="ghost-btn"
+                onClick={() => updateProvider(provider.id, { enabled: !provider.enabled })}
+                disabled={provider.type === "api" && !provider.enabled && !provider.readOnlyReady}
+                title={provider.type === "api" && !provider.readOnlyReady ? "An approved live fixture is required before API execution can be enabled." : undefined}
+              >
                 {provider.enabled ? "Disable" : "Enable"}
               </button>
             </div>
@@ -5938,6 +6808,7 @@ function overviewForRun(overview: HarnessOverview, run: HarnessRun | undefined):
 
 function approvalMatchesRun(approval: ApprovalRequest, run: HarnessRun | undefined) {
   if (!run) return false;
+  if (approval.runId && approval.runId === run.id) return true;
   if (approval.loopId && approval.loopId === run.compatibilityLoopRunId) return true;
   const references = [run.id, run.taskId, run.compatibilityLoopRunId].filter(Boolean);
   const searchable = [approval.id, approval.action, approval.reason, approval.preview, approval.artifactPath]
@@ -6040,6 +6911,7 @@ function createSmokeTestTask(): Task {
     priority: "normal",
     loopProfile: "controlled_smoke",
     providerStrategy: "mock_only",
+    routingPolicyId: routingPolicyIdForLegacy("mock_only"),
     affectedPaths: ["README.md", ".dbc/tasks", ".dbc/loops", ".dbc/evidence", ".dbc/artifacts"],
     allowedPaths: ["README.md", ".dbc/tasks", ".dbc/loops", ".dbc/evidence", ".dbc/artifacts", ".dbc/reports", ".dbc/security", ".dbc/git"],
     deniedPaths: [".env", "node_modules", "src-tauri/target"],
@@ -6122,6 +6994,18 @@ function buildLoopPreflight({
       : { level: "warning", subject: "stop conditions", detail: "No task stop conditions configured." },
   );
   gates.push(...buildTaskProviderStrategyGates(task, steps));
+  if (task) {
+    const routingPolicy = resolveRoutingPolicy(task, state.routingPolicies);
+    const routingSimulation = simulateRouting(routingPolicy, state.providers);
+    const unresolved = routingSimulation.roles.filter((role) => role.decision !== "ready");
+    gates.push({
+      level: routingSimulation.status === "ready" ? "ok" : routingSimulation.status === "approval_required" ? "warning" : "error",
+      subject: "dynamic routing",
+      detail: routingSimulation.status === "ready"
+        ? `${routingPolicy.name} resolves every role; cost ${routingSimulation.estimatedCostTier}, latency ${routingSimulation.estimatedLatencyTier}.`
+        : `${routingPolicy.name}: ${routingSimulation.status}; ${unresolved.map((role) => `${role.roleId}:${role.decision}`).join(", ")}.`,
+    });
+  }
   gates.push(
     task?.specPath && task.specChecksum
       ? { level: "ok", subject: "task spec", detail: `${task.specPath}#${task.specChecksum}` }
@@ -6479,11 +7363,25 @@ function detectStack(path: string) {
   return ["Git", "Local Project"];
 }
 
-function buildConfiguredLoopSteps(agents: AgentRole[], providers: Provider[]) {
+function buildConfiguredLoopSteps(
+  agents: AgentRole[],
+  providers: Provider[],
+  task?: Task,
+  routingPolicies: RoutingPolicy[] = [],
+) {
+  const policy = task && routingPolicies.length ? resolveRoutingPolicy(task, routingPolicies) : undefined;
+  const simulation = policy ? simulateRouting(policy, providers) : undefined;
   return loopTemplate.map((step) => {
     const agent = agents.find((item) => item.id === step.roleId);
-    const provider = selectProviderForAgent(agent, providers).provider ?? providers.find((item) => item.id === step.providerId);
+    const simulatedRole = simulation?.roles.find((item) => item.roleId === step.roleId);
+    const simulatedProvider = simulatedRole?.selectedProviderId
+      ? providers.find((item) => item.id === simulatedRole.selectedProviderId)
+      : undefined;
+    const provider = simulatedProvider ?? selectProviderForAgent(agent, providers).provider ?? providers.find((item) => item.id === step.providerId);
     const normalizedProvider = provider ? normalizeProviderConfig(provider) : undefined;
+    const routingEvidence = simulatedRole
+      ? ` Routing ${simulatedRole.decision}: ${simulatedRole.attempts.map((attempt) => `${attempt.providerId}:${attempt.status}`).join(" -> ")}.`
+      : "";
     return {
       ...step,
       providerId: normalizedProvider?.id ?? agent?.providerId ?? step.providerId,
@@ -6497,9 +7395,10 @@ function buildConfiguredLoopSteps(agents: AgentRole[], providers: Provider[]) {
       timeoutSeconds: normalizedProvider?.timeoutSeconds ?? 900,
       maxOutputBytes: normalizedProvider?.maxOutputBytes ?? 200000,
       maxAttempts: 3,
+      requiresApproval: simulatedRole?.decision === "approval_required",
       status: "waiting" as const,
       output: undefined,
-      evidence: step.evidence,
+      evidence: `${step.evidence}${routingEvidence}`,
     };
   });
 }

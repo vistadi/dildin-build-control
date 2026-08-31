@@ -1,11 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import { buildProviderRunContract, parseArgsTemplate as parseCliArgsTemplate } from "./cliContracts";
+import { normalizeExecutionIdentitySnapshot, routingPolicyIdForLegacy } from "./routing";
+import { normalizeProviderStream } from "./providerStreams";
+import { adapterForProvider } from "./providerAdapters";
+import { curatedModelCatalog, validateApiProvider } from "./apiAdapters";
+import { evaluateMcpToolCall as evaluateMcpToolCallInBrowser, normalizeMcpConnection, validateMcpConnection } from "./mcp";
 import type {
   CliCandidate,
   CliContractCheckResult,
   CommandPolicy,
   ApprovalQueueReport,
+  ApprovalRequest,
   EvidencePack,
+  ExecutionIdentitySnapshot,
   HarnessOverview,
   HarnessRun,
   LaunchDoctorReport,
@@ -14,7 +21,15 @@ import type {
   LoopStep,
   LoopStateMachineReport,
   MemoryNote,
+  ModelCatalogEntry,
+  McpConnectionCheckResult,
+  McpApprovalRecord,
+  McpServerConnection,
+  McpToolCallEvidence,
+  McpToolCallRequest,
   Provider,
+  ProviderAuthStatus,
+  ProviderHealth,
   ProviderHealthResult,
   ProviderRunResult,
   ProviderSessionReport,
@@ -23,15 +38,66 @@ import type {
   RealMicroRunbookReport,
   RevertEvidenceReport,
   RunJournalReport,
+  RoutingSimulationResult,
   StepStructuredReport,
   SupportBundleReport,
   Task,
   TaskContract,
+  ToolPolicy,
   WorkSlice,
 } from "./types";
 
 export function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+export async function testSecretRef(secretRef: string) {
+  if (!isTauriRuntime()) {
+    return {
+      status: /^keychain:[A-Za-z0-9._/-]{3,}$/.test(secretRef) ? "unknown" : "failed",
+      detail: "Keychain metadata checks require the Tauri desktop runtime.",
+      provider: "browser-preview",
+    };
+  }
+  return invoke<{ status: string; detail: string; provider: string }>("test_secret_ref", {
+    request: { secret_ref: secretRef },
+  });
+}
+
+export async function testApiProviderContract(provider: Provider): Promise<ProviderHealthResult> {
+  const validation = validateApiProvider(provider, curatedModelCatalog);
+  if (!validation.valid) {
+    return {
+      status: "failed",
+      detail: validation.errors.join(" "),
+      versionOutput: "",
+      providerKind: provider.vendor,
+      resolvedCommand: provider.endpointUrl,
+      detectedVersion: provider.apiProtocol,
+      compatibilityStatus: "capability_missing",
+      authStatus: provider.secretRef ? "unknown" : "missing",
+      authDetail: "API credential contents were not read.",
+      readOnlyReady: false,
+      recoveryAction: "Fix endpoint, model catalog selection, region, and keychain reference.",
+    };
+  }
+  const secret = await testSecretRef(provider.secretRef ?? "");
+  const present = secret.status === "ok";
+  return {
+    status: present ? "ok" : secret.status === "failed" ? "failed" : "warning",
+    detail: `${provider.apiProtocol} contract is valid. ${secret.detail} No paid model request was sent.`,
+    versionOutput: "",
+    providerKind: provider.vendor,
+    resolvedCommand: provider.endpointUrl,
+    detectedVersion: provider.apiProtocol,
+    compatibilityStatus: "supported",
+    authStatus: present ? "present" : secret.status === "missing" ? "missing" : "unknown",
+    authDetail: secret.detail,
+    readOnlyReady: false,
+    recoveryAction: present
+      ? "Run a separately approved fixture request before switching this API provider to real mode."
+      : "Add the referenced credential to macOS Keychain, then test again.",
+  };
 }
 
 let browserHarnessOverview: HarnessOverview = {
@@ -71,6 +137,9 @@ export interface MemoryNoteRecord {
 export interface ProjectConfigResult {
   providers: { path: string; checksum: string; updatedAt: string };
   policy: { path: string; checksum: string; updatedAt: string };
+  mcpConnections: { path: string; checksum: string; updatedAt: string };
+  toolPolicies: { path: string; checksum: string; updatedAt: string };
+  modelCatalog: { path: string; checksum: string; updatedAt: string };
 }
 
 export interface ProjectConfigDiagnostic {
@@ -82,8 +151,14 @@ export interface ProjectConfigDiagnostic {
 export interface ProjectConfigLoadResult {
   providers: Provider[];
   commandPolicy: CommandPolicy;
+  mcpServers: McpServerConnection[];
+  toolPolicies: ToolPolicy[];
+  modelCatalog: ModelCatalogEntry[];
   providersRecord?: { path: string; checksum: string; updatedAt: string };
   policyRecord?: { path: string; checksum: string; updatedAt: string };
+  mcpConnectionsRecord?: { path: string; checksum: string; updatedAt: string };
+  toolPoliciesRecord?: { path: string; checksum: string; updatedAt: string };
+  modelCatalogRecord?: { path: string; checksum: string; updatedAt: string };
   diagnostics: ProjectConfigDiagnostic[];
 }
 
@@ -116,6 +191,9 @@ export interface LoopRunSummary {
 export interface ProjectRecoveryResult {
   providers: Provider[];
   commandPolicy: CommandPolicy;
+  mcpServers: McpServerConnection[];
+  toolPolicies: ToolPolicy[];
+  modelCatalog: ModelCatalogEntry[];
   tasks: Task[];
   memory: MemoryNote[];
   loops: LoopRunSummary[];
@@ -149,6 +227,9 @@ export async function saveProjectConfig(
   projectPath: string,
   providers: Provider[],
   commandPolicy: CommandPolicy,
+  mcpServers: McpServerConnection[],
+  toolPolicies: ToolPolicy[],
+  modelCatalog: ModelCatalogEntry[],
 ): Promise<ProjectConfigResult> {
   if (!isTauriRuntime()) {
     return {
@@ -162,17 +243,38 @@ export async function saveProjectConfig(
         checksum: `browser-policy-${commandPolicy.allow.length}-${commandPolicy.approvalRequired.length}-${commandPolicy.deny.length}`,
         updatedAt: String(Date.now()),
       },
+      mcpConnections: {
+        path: `${projectPath}/.dbc/mcp-connections.yaml`,
+        checksum: `browser-mcp-${mcpServers.length}`,
+        updatedAt: String(Date.now()),
+      },
+      toolPolicies: {
+        path: `${projectPath}/.dbc/tool-policies.yaml`,
+        checksum: `browser-tool-policies-${toolPolicies.length}`,
+        updatedAt: String(Date.now()),
+      },
+      modelCatalog: {
+        path: `${projectPath}/.dbc/model-catalog.yaml`,
+        checksum: `browser-model-catalog-${modelCatalog.length}`,
+        updatedAt: String(Date.now()),
+      },
     };
   }
 
   const result = await invoke<{
     providers: { path: string; checksum: string; updated_at: string };
     policy: { path: string; checksum: string; updated_at: string };
+    mcp_connections: { path: string; checksum: string; updated_at: string };
+    tool_policies: { path: string; checksum: string; updated_at: string };
+    model_catalog: { path: string; checksum: string; updated_at: string };
   }>("save_project_config", {
     request: {
       project_path: projectPath,
       providers,
       command_policy: commandPolicy,
+      mcp_servers: mcpServers,
+      tool_policies: toolPolicies,
+      model_catalog: modelCatalog,
     },
   });
 
@@ -187,6 +289,21 @@ export async function saveProjectConfig(
       checksum: result.policy.checksum,
       updatedAt: result.policy.updated_at,
     },
+    mcpConnections: {
+      path: result.mcp_connections.path,
+      checksum: result.mcp_connections.checksum,
+      updatedAt: result.mcp_connections.updated_at,
+    },
+    toolPolicies: {
+      path: result.tool_policies.path,
+      checksum: result.tool_policies.checksum,
+      updatedAt: result.tool_policies.updated_at,
+    },
+    modelCatalog: {
+      path: result.model_catalog.path,
+      checksum: result.model_catalog.checksum,
+      updatedAt: result.model_catalog.updated_at,
+    },
   };
 }
 
@@ -195,6 +312,9 @@ export async function loadProjectConfig(projectPath: string): Promise<ProjectCon
     return {
       providers: [],
       commandPolicy: { allow: [], approvalRequired: [], deny: [] },
+      mcpServers: [],
+      toolPolicies: [],
+      modelCatalog: [],
       diagnostics: [
         {
           level: "warning",
@@ -208,8 +328,14 @@ export async function loadProjectConfig(projectPath: string): Promise<ProjectCon
   const result = await invoke<{
     providers: Provider[];
     command_policy: CommandPolicy;
+    mcp_servers: McpServerConnection[];
+    tool_policies: ToolPolicy[];
+    model_catalog: ModelCatalogEntry[];
     providers_record?: { path: string; checksum: string; updated_at: string } | null;
     policy_record?: { path: string; checksum: string; updated_at: string } | null;
+    mcp_connections_record?: { path: string; checksum: string; updated_at: string } | null;
+    tool_policies_record?: { path: string; checksum: string; updated_at: string } | null;
+    model_catalog_record?: { path: string; checksum: string; updated_at: string } | null;
     diagnostics: ProjectConfigDiagnostic[];
   }>("load_project_config", {
     request: { project_path: projectPath },
@@ -218,6 +344,9 @@ export async function loadProjectConfig(projectPath: string): Promise<ProjectCon
   return {
     providers: Array.isArray(result.providers) ? result.providers : [],
     commandPolicy: normalizeCommandPolicy(result.command_policy),
+    mcpServers: Array.isArray(result.mcp_servers) ? result.mcp_servers.map(normalizeMcpConnection) : [],
+    toolPolicies: Array.isArray(result.tool_policies) ? result.tool_policies : [],
+    modelCatalog: Array.isArray(result.model_catalog) ? result.model_catalog : [],
     providersRecord: result.providers_record
       ? {
           path: result.providers_record.path,
@@ -232,6 +361,27 @@ export async function loadProjectConfig(projectPath: string): Promise<ProjectCon
           updatedAt: result.policy_record.updated_at,
         }
       : undefined,
+    mcpConnectionsRecord: result.mcp_connections_record
+      ? {
+          path: result.mcp_connections_record.path,
+          checksum: result.mcp_connections_record.checksum,
+          updatedAt: result.mcp_connections_record.updated_at,
+        }
+      : undefined,
+    toolPoliciesRecord: result.tool_policies_record
+      ? {
+          path: result.tool_policies_record.path,
+          checksum: result.tool_policies_record.checksum,
+          updatedAt: result.tool_policies_record.updated_at,
+        }
+      : undefined,
+    modelCatalogRecord: result.model_catalog_record
+      ? {
+          path: result.model_catalog_record.path,
+          checksum: result.model_catalog_record.checksum,
+          updatedAt: result.model_catalog_record.updated_at,
+        }
+      : undefined,
     diagnostics: result.diagnostics ?? [],
   };
 }
@@ -241,6 +391,9 @@ export async function recoverProjectState(projectPath: string): Promise<ProjectR
     return {
       providers: [],
       commandPolicy: { allow: [], approvalRequired: [], deny: [] },
+      mcpServers: [],
+      toolPolicies: [],
+      modelCatalog: [],
       tasks: [],
       memory: [],
       loops: [],
@@ -257,6 +410,9 @@ export async function recoverProjectState(projectPath: string): Promise<ProjectR
   const result = await invoke<{
     providers: Provider[];
     command_policy: CommandPolicy;
+    mcp_servers: McpServerConnection[];
+    tool_policies: ToolPolicy[];
+    model_catalog: ModelCatalogEntry[];
     tasks: Array<Partial<Task> & { path?: string; checksum?: string; updatedAt?: string }>;
     memory: Array<Partial<MemoryNote> & { path?: string; checksum?: string; updatedAt?: string }>;
     loops: BackendLoopRunSummary[];
@@ -266,6 +422,9 @@ export async function recoverProjectState(projectPath: string): Promise<ProjectR
   return {
     providers: Array.isArray(result.providers) ? result.providers : [],
     commandPolicy: normalizeCommandPolicy(result.command_policy),
+    mcpServers: Array.isArray(result.mcp_servers) ? result.mcp_servers.map(normalizeMcpConnection) : [],
+    toolPolicies: Array.isArray(result.tool_policies) ? result.tool_policies : [],
+    modelCatalog: Array.isArray(result.model_catalog) ? result.model_catalog : [],
     tasks: (result.tasks ?? []).map(normalizeRecoveredTask).filter(Boolean) as Task[],
     memory: (result.memory ?? []).map(normalizeRecoveredMemory).filter(Boolean) as MemoryNote[],
     loops: (result.loops ?? []).map(fromBackendLoopSummary),
@@ -507,6 +666,7 @@ export async function saveTaskSpec(projectPath: string, task: Task): Promise<Tas
       priority: task.priority,
       loop_profile: task.loopProfile,
       provider_strategy: task.providerStrategy,
+      routing_policy_id: task.routingPolicyId,
       affected_paths: task.affectedPaths,
       allowed_paths: task.allowedPaths,
       denied_paths: task.deniedPaths,
@@ -719,7 +879,15 @@ export async function approveWorkSlice(sliceId: string): Promise<WorkSlice> {
   return fromBackendWorkSlice(await invoke<BackendWorkSlice>("approve_work_slice", { sliceId }));
 }
 
-export async function startHarnessRun(projectId: string, projectPath: string, taskId: string, contractId: string, workSliceId: string): Promise<HarnessRun> {
+export async function startHarnessRun(
+  projectId: string,
+  projectPath: string,
+  taskId: string,
+  contractId: string,
+  workSliceId: string,
+  executionIdentity: ExecutionIdentitySnapshot,
+  routingSimulation?: RoutingSimulationResult | null,
+): Promise<HarnessRun> {
   if (!isTauriRuntime()) {
     const run: HarnessRun = {
       id: `browser-harness-${Date.now()}`,
@@ -736,6 +904,7 @@ export async function startHarnessRun(projectId: string, projectPath: string, ta
       lastError: "",
       compatibilityLoopRunId: "browser-loop",
       manifestPath: `${projectPath}/.dbc/harness-runs/browser-harness/manifest.json`,
+      executionIdentity,
     };
     browserHarnessOverview = {
       ...browserHarnessOverview,
@@ -751,6 +920,8 @@ export async function startHarnessRun(projectId: string, projectPath: string, ta
       task_id: taskId,
       contract_id: contractId,
       work_slice_id: workSliceId,
+      execution_identity: executionIdentity,
+      routing_simulation: routingSimulation ?? null,
     },
   });
   return fromBackendHarnessRun(run);
@@ -794,6 +965,7 @@ export async function generateEvidencePack(harnessRunId: string): Promise<Eviden
     const existing = browserHarnessOverview.evidencePacks.find((item) => item.harnessRunId === harnessRunId);
     if (existing) return existing;
     const pack: EvidencePack = {
+      schemaVersion: 2,
       id: `browser-pack-${Date.now()}`,
       projectId: run.projectId,
       projectPath: run.projectPath,
@@ -812,6 +984,27 @@ export async function generateEvidencePack(harnessRunId: string): Promise<Eviden
         tests: "passed",
         review: "passed",
         security: "passed",
+      },
+      executionIdentity: run.executionIdentity,
+      verification: {
+        schemaVersion: 2,
+        complete: true,
+        identityChecksum: run.executionIdentity.configChecksum,
+        artifacts: [],
+        verifiedAt: String(Date.now()),
+      },
+      mcpActivity: { status: "not_used", calls: 0, tools: [], paths: [] },
+      routingActivity: {
+        status: "preview",
+        selectedPolicyId: run.executionIdentity.routingPolicyId,
+        note: "Browser preview does not execute a provider fallback.",
+      },
+      usage: {
+        status: "unknown",
+        records: [],
+        totals: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, amount: 0 },
+        currency: "unknown",
+        confidence: "unknown",
       },
     };
     browserHarnessOverview = {
@@ -931,6 +1124,13 @@ export async function testCliProvider(provider: Provider): Promise<ProviderHealt
       status: "ok",
       detail: "Built-in mock adapter is available.",
       versionOutput: "mock-adapter",
+      providerKind: "mock",
+      detectedVersion: "built-in",
+      compatibilityStatus: "supported",
+      authStatus: "not_required",
+      authDetail: "No external authentication is required.",
+      readOnlyReady: true,
+      recoveryAction: "Provider is ready.",
     };
   }
 
@@ -939,6 +1139,13 @@ export async function testCliProvider(provider: Provider): Promise<ProviderHealt
       status: "ok",
       detail: "Local runner is available through DBC command policy.",
       versionOutput: "local-runner",
+      providerKind: "local-runner",
+      detectedVersion: "built-in",
+      compatibilityStatus: "supported",
+      authStatus: "not_required",
+      authDetail: "No external authentication is required.",
+      readOnlyReady: true,
+      recoveryAction: "Provider is ready.",
     };
   }
 
@@ -951,11 +1158,24 @@ export async function testCliProvider(provider: Provider): Promise<ProviderHealt
   }
 
   const versionArgs = parseArgsTemplate(provider.versionArgs || "--version", "");
-  const result = await invoke<{ status: ProviderHealthResult["status"]; detail: string; version_output: string }>(
+  const result = await invoke<{
+    status: ProviderHealthResult["status"];
+    detail: string;
+    version_output: string;
+    provider_kind: string;
+    resolved_command: string;
+    detected_version: string;
+    compatibility_status: ProviderHealthResult["compatibilityStatus"];
+    auth_status: ProviderHealthResult["authStatus"];
+    auth_detail: string;
+    read_only_ready: boolean;
+    recovery_action: string;
+  }>(
     "test_cli_provider",
     {
       command: provider.command,
       versionArgs,
+      argsTemplate: provider.argsTemplate,
     },
   );
 
@@ -963,6 +1183,155 @@ export async function testCliProvider(provider: Provider): Promise<ProviderHealt
     status: result.status,
     detail: result.detail,
     versionOutput: result.version_output,
+    providerKind: result.provider_kind,
+    resolvedCommand: result.resolved_command,
+    detectedVersion: result.detected_version,
+    compatibilityStatus: result.compatibility_status,
+    authStatus: result.auth_status,
+    authDetail: result.auth_detail,
+    readOnlyReady: result.read_only_ready,
+    recoveryAction: result.recovery_action,
+  };
+}
+
+export async function testMcpConnection(connection: McpServerConnection): Promise<McpConnectionCheckResult> {
+  const normalized = normalizeMcpConnection(connection);
+  const validation = validateMcpConnection(normalized);
+  if (!isTauriRuntime()) {
+    return {
+      status: validation.valid ? "warning" : "failed",
+      detail: validation.valid
+        ? "MCP contract is valid in safe preview; live discovery requires the Tauri desktop runtime."
+        : "MCP contract validation failed.",
+      transport: normalized.transport,
+      resolvedCommand: "",
+      protocolVersion: "",
+      serverVersion: "",
+      tools: [],
+      authStatus:
+        normalized.authMode === "none"
+          ? "not_required"
+          : normalized.authMode === "oauth" && normalized.oauthStatus === "connected"
+            ? "present"
+            : normalized.authMode === "secret_ref" && normalized.secretRef
+              ? "present"
+              : "missing",
+      recoveryAction: validation.valid
+        ? "Open the desktop build and run discovery."
+        : validation.errors.join(" "),
+      diagnostics: [
+        ...validation.errors.map((detail) => ({ level: "error" as const, subject: "contract", detail })),
+        ...validation.warnings.map((detail) => ({ level: "warning" as const, subject: "contract", detail })),
+      ],
+    };
+  }
+  const result = await invoke<{
+    status: ProviderHealth;
+    detail: string;
+    transport: McpServerConnection["transport"];
+    resolved_command: string;
+    protocol_version: string;
+    server_version: string;
+    tools: McpServerConnection["discoveredTools"];
+    auth_status: ProviderAuthStatus;
+    recovery_action: string;
+    diagnostics: McpConnectionCheckResult["diagnostics"];
+  }>("test_mcp_connection", {
+    request: {
+      transport: normalized.transport,
+      command: normalized.command,
+      args: normalized.args,
+      url: normalized.url,
+      auth_mode: normalized.authMode,
+      secret_ref: normalized.secretRef,
+      oauth_status: normalized.oauthStatus,
+      tool_policy_id: normalized.toolPolicyId,
+      timeout_seconds: normalized.timeoutSeconds,
+    },
+  });
+  return {
+    status: result.status,
+    detail: result.detail,
+    transport: result.transport,
+    resolvedCommand: result.resolved_command,
+    protocolVersion: result.protocol_version,
+    serverVersion: result.server_version,
+    tools: Array.isArray(result.tools) ? result.tools : [],
+    authStatus: result.auth_status,
+    recoveryAction: result.recovery_action,
+    diagnostics: result.diagnostics ?? [],
+  };
+}
+
+export async function evaluateMcpToolCall(
+  request: McpToolCallRequest,
+  priorEvidence: McpToolCallEvidence[] = [],
+): Promise<McpToolCallEvidence> {
+  if (!isTauriRuntime()) return evaluateMcpToolCallInBrowser(request, priorEvidence);
+  const result = await invoke<Record<string, unknown>>("evaluate_mcp_tool_call", {
+    request: {
+      project_path: request.projectPath,
+      run_id: request.runId,
+      connection_id: request.connectionId,
+      policy: request.policy,
+      tool: request.tool,
+      arguments: request.arguments,
+      idempotency_key: request.idempotencyKey,
+      attempt: request.attempt,
+      approval_granted: request.approvalGranted,
+    },
+  });
+  return {
+    schemaVersion: 1,
+    id: String(result.id ?? ""),
+    runId: String(result.runId ?? request.runId),
+    connectionId: String(result.connectionId ?? request.connectionId),
+    policyId: String(result.policyId ?? request.policy.id),
+    toolName: String(result.toolName ?? request.tool.name),
+    intent: String(result.intent ?? "unknown") as McpToolCallEvidence["intent"],
+    decision: String(result.decision ?? "deny") as McpToolCallEvidence["decision"],
+    reason: String(result.reason ?? "MCP proxy did not return a reason."),
+    shouldExecute: Boolean(result.shouldExecute),
+    duplicateReplayed: Boolean(result.duplicateReplayed),
+    idempotencyKey: String(result.idempotencyKey ?? request.idempotencyKey),
+    attempt: Number(result.attempt ?? request.attempt),
+    argumentChecksum: String(result.argumentChecksum ?? ""),
+    observedPaths: Array.isArray(result.observedPaths) ? result.observedPaths.map(String) : [],
+    observedHosts: Array.isArray(result.observedHosts) ? result.observedHosts.map(String) : [],
+    createdAt: String(result.createdAt ?? Date.now()),
+    evidencePath: String(result.evidencePath ?? ""),
+  };
+}
+
+export async function recordMcpApproval(
+  projectPath: string,
+  approval: Pick<ApprovalRequest, "id" | "runId" | "connectionId" | "toolName" | "status">,
+): Promise<McpApprovalRecord> {
+  const record = {
+    id: approval.id,
+    runId: approval.runId ?? "",
+    connectionId: approval.connectionId ?? "",
+    toolName: approval.toolName ?? "",
+    scope: "run" as const,
+    status: approval.status === "approved" ? "approved" as const : approval.status === "rejected" ? "rejected" as const : "changes_requested" as const,
+    decidedAt: String(Date.now()),
+    path: `${projectPath}/.dbc/approvals/mcp/${approval.runId}.json`,
+  };
+  if (!isTauriRuntime()) return record;
+  const result = await invoke<Record<string, unknown>>("record_mcp_approval", {
+    request: {
+      project_path: projectPath,
+      id: record.id,
+      run_id: record.runId,
+      connection_id: record.connectionId,
+      tool_name: record.toolName,
+      status: record.status,
+    },
+  });
+  return {
+    ...record,
+    decidedAt: String(result.decidedAt ?? record.decidedAt),
+    path: String(result.path ?? record.path),
   };
 }
 
@@ -1071,6 +1440,7 @@ export async function runCliProvider({
     duration_ms: number;
     decision: ProviderRunResult["decision"];
     redacted_output: string;
+    stream_report?: ProviderRunResult["streamReport"];
   }>("run_cli_provider", {
     request: {
       command: provider.command,
@@ -1092,6 +1462,9 @@ export async function runCliProvider({
     durationMs: result.duration_ms,
     decision: result.decision,
     redactedOutput: result.redacted_output,
+    streamReport:
+      result.stream_report ??
+      normalizeProviderStream(adapterForProvider(provider).id, result.stdout, result.stderr, result.exit_code),
   };
 }
 
@@ -1108,6 +1481,7 @@ export async function startBackendLoop({
   taskSpecChecksum,
   memoryContext,
   memoryRefs,
+  routingSimulation,
   steps,
 }: {
   projectId: string;
@@ -1122,6 +1496,7 @@ export async function startBackendLoop({
   taskSpecChecksum: string;
   memoryContext: string;
   memoryRefs: string[];
+  routingSimulation?: RoutingSimulationResult | null;
   steps: LoopStep[];
 }): Promise<LoopRunSnapshot> {
   if (!isTauriRuntime()) {
@@ -1166,6 +1541,7 @@ export async function startBackendLoop({
       task_spec_checksum: taskSpecChecksum,
       memory_context: memoryContext,
       memory_refs: memoryRefs,
+      routing_simulation: routingSimulation ?? null,
       steps: steps.map(toBackendStepInput),
     },
   });
@@ -1823,9 +2199,11 @@ interface BackendHarnessRun {
   last_error: string;
   compatibility_loop_run_id: string;
   manifest_path: string;
+  execution_identity: unknown;
 }
 
 interface BackendEvidencePack {
+  schema_version: number;
   id: string;
   project_id: string;
   project_path: string;
@@ -1839,6 +2217,11 @@ interface BackendEvidencePack {
   finalized_at: string;
   final_decision: string;
   refs: Record<string, unknown>;
+  execution_identity: unknown;
+  verification: Record<string, unknown>;
+  mcp_activity: Record<string, unknown>;
+  routing_activity: Record<string, unknown>;
+  usage: Record<string, unknown>;
 }
 
 interface BackendHarnessOverview {
@@ -1987,11 +2370,13 @@ function fromBackendHarnessRun(row: BackendHarnessRun): HarnessRun {
     lastError: row.last_error,
     compatibilityLoopRunId: row.compatibility_loop_run_id,
     manifestPath: row.manifest_path,
+    executionIdentity: normalizeExecutionIdentitySnapshot(row.execution_identity),
   };
 }
 
 function fromBackendEvidencePack(row: BackendEvidencePack): EvidencePack {
   return {
+    schemaVersion: row.schema_version ?? 1,
     id: row.id,
     projectId: row.project_id,
     projectPath: row.project_path,
@@ -2005,6 +2390,11 @@ function fromBackendEvidencePack(row: BackendEvidencePack): EvidencePack {
     finalizedAt: row.finalized_at,
     finalDecision: row.final_decision,
     refs: row.refs ?? {},
+    executionIdentity: normalizeExecutionIdentitySnapshot(row.execution_identity),
+    verification: row.verification ?? {},
+    mcpActivity: row.mcp_activity ?? {},
+    routingActivity: row.routing_activity ?? {},
+    usage: row.usage ?? {},
   };
 }
 
@@ -2114,6 +2504,10 @@ function normalizeRecoveredTask(value: Partial<Task> & { path?: string; checksum
     priority: value.priority ?? "normal",
     loopProfile: value.loopProfile ?? "mock",
     providerStrategy: value.providerStrategy ?? "codex_build_claude_review",
+    routingPolicyId:
+      typeof value.routingPolicyId === "string" && value.routingPolicyId
+        ? value.routingPolicyId
+        : routingPolicyIdForLegacy(value.providerStrategy),
     affectedPaths,
     allowedPaths: Array.isArray(value.allowedPaths) && value.allowedPaths.length ? value.allowedPaths : affectedPaths,
     deniedPaths: Array.isArray(value.deniedPaths) ? value.deniedPaths : [],

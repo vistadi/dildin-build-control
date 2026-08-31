@@ -1,9 +1,16 @@
 import type { AgentRole, AppState, CommandPolicy, LoopStep, Provider, ProviderPreset } from "./types";
+import { experimentalProviderTemplates } from "./providerAdapters";
+import { defaultMcpServers, defaultToolPolicies } from "./mcp";
+import { curatedModelCatalog, defaultApiProviders } from "./apiAdapters";
+import { defaultRoutingPolicies, routingPolicyIdForLegacy } from "./routing";
 
-export const defaultProviders: Provider[] = [
+const coreProviders: Provider[] = [
   {
     id: "mock_adapter",
     name: "Mock Adapter",
+    vendor: "dbc",
+    adapterId: "mock/v1",
+    invocationProfileId: "mock/deterministic/v1",
     type: "mock",
     enabled: true,
     health: "ok",
@@ -15,12 +22,20 @@ export const defaultProviders: Provider[] = [
     timeoutSeconds: 15,
     maxOutputBytes: 50000,
     capabilities: ["plan", "write_code", "review_diff", "analyze_logs", "security_review", "structured_output"],
+    modelIds: ["deterministic"],
+    costTier: "free",
+    latencyTier: "local",
+    dataResidency: "local",
+    egressRequired: false,
     assignedRoles: [],
     lastTestResult: "Built-in deterministic provider is available.",
   },
   {
     id: "codex_cli",
     name: "Codex CLI",
+    vendor: "openai",
+    adapterId: "codex/exec-workspace-write/v1",
+    invocationProfileId: "codex/exec-workspace-write/v1",
     type: "cli",
     enabled: true,
     health: "unknown",
@@ -32,11 +47,19 @@ export const defaultProviders: Provider[] = [
     timeoutSeconds: 900,
     maxOutputBytes: 200000,
     capabilities: ["plan", "write_code", "generate_tests", "structured_output"],
+    modelIds: ["codex"],
+    costTier: "medium",
+    latencyTier: "standard",
+    dataResidency: "us",
+    egressRequired: true,
     assignedRoles: ["lead", "developer", "product"],
   },
   {
     id: "claude_code",
     name: "Claude Code",
+    vendor: "anthropic",
+    adapterId: "claude/print-stdin/v1",
+    invocationProfileId: "claude/print-stdin/v1",
     type: "cli",
     enabled: true,
     health: "unknown",
@@ -48,11 +71,19 @@ export const defaultProviders: Provider[] = [
     timeoutSeconds: 900,
     maxOutputBytes: 200000,
     capabilities: ["review_diff", "analyze_logs", "security_review", "structured_output"],
+    modelIds: ["claude"],
+    costTier: "medium",
+    latencyTier: "standard",
+    dataResidency: "us",
+    egressRequired: true,
     assignedRoles: ["architect", "qa", "reviewer", "security"],
   },
   {
     id: "local_terminal",
     name: "Local Terminal Runner",
+    vendor: "local",
+    adapterId: "local-runner/v1",
+    invocationProfileId: "local-runner/policy-command/v1",
     type: "local_runner",
     enabled: true,
     health: "ok",
@@ -64,10 +95,17 @@ export const defaultProviders: Provider[] = [
     timeoutSeconds: 300,
     maxOutputBytes: 200000,
     capabilities: ["run_build", "run_tests", "git_status", "git_diff"],
+    modelIds: ["local"],
+    costTier: "free",
+    latencyTier: "local",
+    dataResidency: "local",
+    egressRequired: false,
     assignedRoles: ["devops"],
     lastTestResult: "Local command runner is available in Tauri runtime.",
   },
 ];
+
+export const defaultProviders: Provider[] = [...coreProviders, ...experimentalProviderTemplates(), ...defaultApiProviders];
 
 export const defaultCommandPolicy: CommandPolicy = {
   allow: [
@@ -106,6 +144,19 @@ export const defaultCommandPolicy: CommandPolicy = {
 };
 
 export const providerPresets: ProviderPreset[] = [
+  {
+    id: "balanced_kimi_qwen_read_only",
+    name: "Balanced Kimi + Qwen",
+    description: "Kimi plans and summarizes, Qwen reviews and analyzes, Codex remains the bounded builder; all new providers start disabled/mock.",
+    providers: [...coreProviders, ...experimentalProviderTemplates(true)].map((provider) => ({
+      ...provider,
+      assignedRoles:
+        provider.id === "kimi_code" ? ["lead", "reviewer", "product"]
+          : provider.id === "qwen_code" ? ["architect", "qa", "security"]
+            : provider.id === "codex_cli" ? ["developer"]
+              : provider.id === "local_terminal" ? ["devops"] : [],
+    })),
+  },
   {
     id: "codex_builder_claude_reviewer",
     name: "Codex Builder + Claude Reviewer",
@@ -310,6 +361,7 @@ export const loopTemplate: LoopStep[] = [
 ];
 
 export const initialState: AppState = {
+  telemetryEnabled: false,
   projects: [
     {
       id: "dbc",
@@ -327,7 +379,11 @@ export const initialState: AppState = {
   activeProjectId: "dbc",
   providers: defaultProviders,
   agents: defaultAgents,
+  routingPolicies: defaultRoutingPolicies,
+  modelCatalog: curatedModelCatalog,
   commandPolicy: defaultCommandPolicy,
+  mcpServers: defaultMcpServers(),
+  toolPolicies: defaultToolPolicies,
   tasks: [
     {
       id: "TASK-001",
@@ -347,6 +403,7 @@ export const initialState: AppState = {
       priority: "high",
       loopProfile: "mock",
       providerStrategy: "codex_build_claude_review",
+      routingPolicyId: routingPolicyIdForLegacy("codex_build_claude_review"),
       affectedPaths: ["src", "src-tauri", "README.md"],
       allowedPaths: ["src", "src-tauri", "README.md", ".dbc"],
       deniedPaths: [".env", "node_modules", "src-tauri/target"],

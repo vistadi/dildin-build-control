@@ -43,5 +43,19 @@ The current alpha is not signed or notarized. If macOS blocks it, follow Apple's
 - Do not store credentials, tokens, or private keys in `.dbc` files.
 - Use the controlled smoke flow before enabling a real CLI provider.
 - Review every approval, command policy result, and final EvidencePack.
+- Add Kimi/Qwen and MCP connections from Settings only after their contract/discovery
+  checks pass; connections remain disabled by default.
+
+## Build the current desktop locally
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+pnpm tauri build
+```
+
+The generated macOS app/DMG appears under `src-tauri/target/release/bundle/`. A local
+build is not a signed public release unless the verification steps in
+`RELEASE_SIGNING.md` all pass.
 
 For a source build, follow the [README](../README.md#try-it).

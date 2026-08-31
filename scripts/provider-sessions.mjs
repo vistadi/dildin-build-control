@@ -81,6 +81,19 @@ function sessionRecord(provider, contract) {
   if (provider.type === "cli" && contract?.status === "warning") warnings.push({ subject: "contract", detail: "Provider contract has warnings." });
   if (provider.type === "cli" && !isExactPath(provider.command || "")) warnings.push({ subject: "exact path", detail: "Provider command is PATH-based; save the resolved executable path for portability." });
   if (provider.runMode === "real" && auth.status === "unknown") warnings.push({ subject: "auth", detail: auth.detail });
+  if (provider.runMode === "real" && auth.status === "missing") blockers.push({ subject: "auth", detail: auth.detail });
+  if (providerKind === "kimi" && provider.runMode === "real") {
+    blockers.push({
+      subject: "kimi tool isolation",
+      detail: "Kimi print mode auto-approves internal tool calls; real execution remains blocked until the DBC MCP/tool policy proxy is active.",
+    });
+  }
+  if (providerKind === "qwen" && provider.runMode === "real" && !qwenReadOnlyTemplate(provider.argsTemplate || "")) {
+    blockers.push({
+      subject: "qwen read-only profile",
+      detail: "Real Qwen execution requires --safe-mode and --max-tool-calls 0, with no yolo flags.",
+    });
+  }
   if (provider.runMode === "real" && provider.promptMode === "terminal") warnings.push({ subject: "terminal handoff", detail: "Human-operated terminal or PTY is required; DBC will stop before non-interactive execution." });
 
   const status = provider.enabled !== "true"
@@ -130,7 +143,14 @@ function probeVersion(provider, resolvedCommand) {
     maxBuffer: 1024 * 1024,
   });
   const output = trim(`${result.stdout || ""}${result.stderr || ""}`, 500);
-  return { status: result.status === 0 ? "ok" : "warning", output };
+  const detectedVersion = detectSemver(output);
+  const compatible = providerKindFromCommand(provider.command) !== "kimi" || semverAtLeast(detectedVersion, "0.21.0");
+  return {
+    status: result.status === 0 && compatible ? "ok" : "warning",
+    output,
+    detectedVersion,
+    compatibility: compatible ? "supported" : "unsupported",
+  };
 }
 
 function probeAuth(providerKind) {
@@ -149,14 +169,40 @@ function probeAuth(providerKind) {
     ];
     return presenceProbe("claude auth", candidates);
   }
+  if (providerKind === "kimi") {
+    const candidates = [
+      process.env.KIMI_SHARE_DIR || "",
+      path.join(os.homedir(), ".kimi"),
+    ].filter(Boolean);
+    return presenceProbe("kimi auth", candidates, true);
+  }
+  if (providerKind === "qwen") {
+    const envPresent = [
+      "BAILIAN_CODING_PLAN_API_KEY",
+      "OPENAI_API_KEY",
+      "DASHSCOPE_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "GEMINI_API_KEY",
+    ].some((name) => Boolean(process.env[name]));
+    const candidates = [path.join(os.homedir(), ".qwen", "settings.json")];
+    const result = presenceProbe("qwen auth", candidates, true);
+    if (envPresent) {
+      return {
+        status: "present",
+        detail: "Qwen API-key environment presence detected without reading secret contents.",
+        checked: result.checked,
+      };
+    }
+    return result;
+  }
   return { status: "not_required", detail: "No external auth probe required for this provider kind.", checked: [] };
 }
 
-function presenceProbe(label, candidates) {
+function presenceProbe(label, candidates, missingIsDefinitive = false) {
   const checked = candidates.map((filePath) => ({ path: filePath, present: existsSync(filePath) }));
   const present = checked.some((item) => item.present);
   return {
-    status: present ? "present" : "unknown",
+    status: present ? "present" : missingIsDefinitive ? "missing" : "unknown",
     detail: present ? `${label} presence detected without reading secret contents.` : `${label} presence was not detected; provider may still be authenticated through another official CLI mechanism.`,
     checked,
   };
@@ -166,7 +212,38 @@ function supportedPromptModes(providerKind, provider) {
   if (provider.type === "mock" || provider.type === "local_runner") return ["internal"];
   if (providerKind === "codex") return ["stdin", "terminal"];
   if (providerKind === "claude") return ["stdin", "terminal"];
+  if (providerKind === "kimi" || providerKind === "qwen") return ["arg", "terminal"];
   return ["stdin", "arg", "file", "terminal"];
+}
+
+function providerKindFromCommand(command) {
+  const fileName = path.basename(String(command || "")).replace(/\.(cmd|exe|bat)$/i, "").toLowerCase();
+  if (!fileName) return "internal";
+  if (fileName === "codex") return "codex";
+  if (fileName === "claude") return "claude";
+  if (fileName === "kimi") return "kimi";
+  if (fileName === "qwen") return "qwen";
+  return "generic";
+}
+
+function qwenReadOnlyTemplate(template) {
+  return template.includes("--safe-mode")
+    && /--max-tool-calls(?:=|\s+)0(?:\s|$)/.test(template)
+    && !/(?:^|\s)(?:--yolo|-y)(?:\s|$)|--approval-mode(?:=|\s+)yolo/.test(template);
+}
+
+function detectSemver(text) {
+  return String(text || "").match(/\b\d+\.\d+(?:\.\d+)?\b/)?.[0] || "";
+}
+
+function semverAtLeast(version, minimum) {
+  if (!version) return false;
+  const parts = (value) => value.split(".").map(Number).concat([0, 0, 0]).slice(0, 3);
+  const left = parts(version);
+  const right = parts(minimum);
+  return left[0] > right[0]
+    || (left[0] === right[0] && left[1] > right[1])
+    || (left[0] === right[0] && left[1] === right[1] && left[2] >= right[2]);
 }
 
 function parseProviders(text) {
@@ -236,13 +313,6 @@ function splitCommandLine(input) {
   }
   if (current) args.push(current);
   return args;
-}
-
-function providerKindFromCommand(command) {
-  const name = path.basename(String(command || "").replace(/\\/g, "/")).replace(/\.(cmd|exe|bat)$/i, "").toLowerCase();
-  if (name === "codex") return "codex";
-  if (name === "claude") return "claude";
-  return command ? "generic" : "internal";
 }
 
 function isExactPath(value) {

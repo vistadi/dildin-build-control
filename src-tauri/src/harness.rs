@@ -99,6 +99,10 @@ pub struct HarnessRunRequest {
     pub task_id: String,
     pub contract_id: String,
     pub work_slice_id: String,
+    #[serde(default)]
+    pub execution_identity: serde_json::Value,
+    #[serde(default)]
+    pub routing_simulation: serde_json::Value,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -117,10 +121,12 @@ pub struct HarnessRun {
     pub last_error: String,
     pub compatibility_loop_run_id: String,
     pub manifest_path: String,
+    pub execution_identity: serde_json::Value,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct EvidencePack {
+    pub schema_version: i64,
     pub id: String,
     pub project_id: String,
     pub project_path: String,
@@ -134,6 +140,11 @@ pub struct EvidencePack {
     pub finalized_at: String,
     pub final_decision: String,
     pub refs: serde_json::Value,
+    pub execution_identity: serde_json::Value,
+    pub verification: serde_json::Value,
+    pub mcp_activity: serde_json::Value,
+    pub routing_activity: serde_json::Value,
+    pub usage: serde_json::Value,
 }
 
 #[derive(Clone, Deserialize)]
@@ -215,7 +226,8 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             completed_at text not null default '',
             last_error text not null default '',
             compatibility_loop_run_id text not null default '',
-            manifest_path text not null default ''
+            manifest_path text not null default '',
+            execution_identity_json text not null default '{}'
         );
         create table if not exists evidence_packs (
             id text primary key,
@@ -230,11 +242,59 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             created_at text not null,
             finalized_at text not null default '',
             final_decision text not null default '',
-            refs_json text not null default '{}'
+            refs_json text not null default '{}',
+            execution_identity_json text not null default '{}',
+            schema_version integer not null default 1,
+            verification_json text not null default '{}',
+            mcp_activity_json text not null default '{}',
+            routing_activity_json text not null default '{}',
+            usage_json text not null default '{}'
         );
         ",
     )
     .map_err(|err| err.to_string())?;
+    ensure_column(
+        conn,
+        "harness_runs",
+        "execution_identity_json",
+        "text not null default '{}'",
+    )?;
+    ensure_column(
+        conn,
+        "evidence_packs",
+        "schema_version",
+        "integer not null default 1",
+    )?;
+    ensure_column(
+        conn,
+        "evidence_packs",
+        "verification_json",
+        "text not null default '{}'",
+    )?;
+    ensure_column(
+        conn,
+        "evidence_packs",
+        "mcp_activity_json",
+        "text not null default '{}'",
+    )?;
+    ensure_column(
+        conn,
+        "evidence_packs",
+        "routing_activity_json",
+        "text not null default '{}'",
+    )?;
+    ensure_column(
+        conn,
+        "evidence_packs",
+        "usage_json",
+        "text not null default '{}'",
+    )?;
+    ensure_column(
+        conn,
+        "evidence_packs",
+        "execution_identity_json",
+        "text not null default '{}'",
+    )?;
     Ok(())
 }
 
@@ -494,6 +554,7 @@ pub fn create_harness_run(
         last_error: String::new(),
         compatibility_loop_run_id: String::new(),
         manifest_path: manifest_path.display().to_string(),
+        execution_identity: request.execution_identity,
     };
     write_harness_artifacts(&run)?;
     insert_harness_run(conn, &run)?;
@@ -603,6 +664,26 @@ pub fn generate_evidence_pack(
         .join(".dbc")
         .join("reports")
         .join(format!("{pack_id}-acceptance.md"));
+    let routing_evidence_path = if run.compatibility_loop_run_id.is_empty() {
+        PathBuf::new()
+    } else {
+        PathBuf::from(&run.project_path)
+            .join(".dbc")
+            .join("evidence")
+            .join(&run.compatibility_loop_run_id)
+            .join("routing-fallback.json")
+    };
+    let mcp_evidence_paths = [run.id.as_str(), run.compatibility_loop_run_id.as_str()]
+        .iter()
+        .filter(|id| !id.is_empty())
+        .map(|id| {
+            PathBuf::from(&run.project_path)
+                .join(".dbc")
+                .join("evidence")
+                .join("mcp")
+                .join(format!("{}.jsonl", sanitize_file_stem(id)))
+        })
+        .collect::<Vec<_>>();
     let refs = serde_json::json!({
         "taskContract": contract_path(&run.project_path, &run.contract_id).display().to_string(),
         "workSlice": slice_path(&run.project_path, &run.current_slice_id).display().to_string(),
@@ -615,9 +696,39 @@ pub fn generate_evidence_pack(
         "securityReport": if run.compatibility_loop_run_id.is_empty() { String::new() } else { PathBuf::from(&run.project_path).join(".dbc").join("security").join(format!("{}.json", run.compatibility_loop_run_id)).display().to_string() },
         "buildLog": if run.compatibility_loop_run_id.is_empty() { String::new() } else { PathBuf::from(&run.project_path).join(".dbc").join("artifacts").join(&run.compatibility_loop_run_id).join("03-build.md").display().to_string() },
         "testLog": if run.compatibility_loop_run_id.is_empty() { String::new() } else { PathBuf::from(&run.project_path).join(".dbc").join("artifacts").join(&run.compatibility_loop_run_id).join("04-test.md").display().to_string() },
+        "routingEvidence": routing_evidence_path.display().to_string(),
+        "mcpEvidence": mcp_evidence_paths.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
+        "executionIdentityChecksum": run.execution_identity.get("configChecksum").and_then(serde_json::Value::as_str).unwrap_or(""),
         "finalDecision": ""
     });
+    let routing_activity = if routing_evidence_path.is_file() {
+        fs::read_to_string(&routing_evidence_path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+            .unwrap_or_else(|| {
+                serde_json::json!({
+                    "status": "invalid",
+                    "path": routing_evidence_path.display().to_string(),
+                })
+            })
+    } else {
+        serde_json::json!({
+            "status": "not_recorded",
+            "path": routing_evidence_path.display().to_string(),
+        })
+    };
+    let mcp_activity = summarize_mcp_activity(&mcp_evidence_paths);
+    let usage = serde_json::json!({
+        "status": "unknown",
+        "records": [],
+        "totals": {"inputTokens": 0, "outputTokens": 0, "cachedInputTokens": 0, "amount": 0},
+        "currency": "unknown",
+        "confidence": "unknown",
+        "note": "Provider usage is included only when a verified adapter response exposes usage fields. No estimate is invented."
+    });
+    let verification = build_evidence_verification(&refs, &run.execution_identity);
     let pack = EvidencePack {
+        schema_version: 2,
         id: pack_id,
         project_id: run.project_id.clone(),
         project_path: run.project_path.clone(),
@@ -631,6 +742,11 @@ pub fn generate_evidence_pack(
         finalized_at: String::new(),
         final_decision: String::new(),
         refs,
+        execution_identity: run.execution_identity.clone(),
+        verification,
+        mcp_activity,
+        routing_activity,
+        usage,
     };
     write_json(&manifest_path, &pack)?;
     write_evidence_report(&report_path, &pack)?;
@@ -649,11 +765,125 @@ pub fn generate_evidence_pack(
     Ok(pack)
 }
 
+fn summarize_mcp_activity(paths: &[PathBuf]) -> serde_json::Value {
+    let mut calls = 0_u64;
+    let mut allowed = 0_u64;
+    let mut approval_required = 0_u64;
+    let mut denied = 0_u64;
+    let mut completed = 0_u64;
+    let mut tools = std::collections::BTreeSet::new();
+    let mut evidence_paths = Vec::new();
+    for path in paths {
+        if !path.is_file() {
+            continue;
+        }
+        evidence_paths.push(path.display().to_string());
+        if let Ok(content) = fs::read_to_string(path) {
+            for line in content.lines() {
+                let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+                    continue;
+                };
+                if let Some(tool) = record.get("toolName").and_then(|value| value.as_str()) {
+                    tools.insert(tool.to_string());
+                }
+                if record.get("outcome").and_then(|value| value.as_str()) == Some("completed") {
+                    completed += 1;
+                    continue;
+                }
+                calls += 1;
+                match record.get("decision").and_then(|value| value.as_str()) {
+                    Some("allow") => allowed += 1,
+                    Some("approval_required") => approval_required += 1,
+                    Some("deny") => denied += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    serde_json::json!({
+        "status": if evidence_paths.is_empty() { "not_used" } else { "recorded" },
+        "calls": calls,
+        "allowed": allowed,
+        "approvalRequired": approval_required,
+        "denied": denied,
+        "completed": completed,
+        "tools": tools.into_iter().collect::<Vec<_>>(),
+        "paths": evidence_paths,
+    })
+}
+
+fn build_evidence_verification(
+    refs: &serde_json::Value,
+    execution_identity: &serde_json::Value,
+) -> serde_json::Value {
+    let required = ["taskContract", "workSlice", "harnessRun"];
+    let artifacts = required
+        .iter()
+        .map(|key| {
+            let path = refs
+                .get(*key)
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let exists = !path.is_empty() && Path::new(path).is_file();
+            let content = if exists {
+                fs::read_to_string(path).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            serde_json::json!({
+                "kind": key,
+                "path": path,
+                "exists": exists,
+                "checksum": if exists { stable_checksum(&content) } else { String::new() },
+                "bytes": content.len(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let identity_checksum = execution_identity
+        .get("configChecksum")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let complete = artifacts
+        .iter()
+        .all(|artifact| artifact.get("exists").and_then(|value| value.as_bool()) == Some(true))
+        && !identity_checksum.is_empty();
+    serde_json::json!({
+        "schemaVersion": 2,
+        "complete": complete,
+        "identityChecksum": identity_checksum,
+        "artifacts": artifacts,
+        "verifiedAt": unix_millis(),
+    })
+}
+
 pub fn accept_or_rework(
     conn: &Connection,
     request: FinalDecisionRequest,
 ) -> Result<HarnessRun, String> {
     let mut run = read_harness_run(conn, &request.harness_run_id)?;
+    if ["accepted", "accept"].contains(&request.decision.as_str()) {
+        let packs = list_evidence_packs_for_run(conn, &run.id)?;
+        let pack = packs
+            .first()
+            .ok_or_else(|| "Acceptance requires a generated EvidencePack.".to_string())?;
+        if pack.execution_identity != run.execution_identity {
+            return Err(
+                "Acceptance blocked: HarnessRun and EvidencePack execution identities differ."
+                    .to_string(),
+            );
+        }
+        if pack.schema_version < 2
+            || pack
+                .verification
+                .get("complete")
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+        {
+            return Err(
+                "Acceptance blocked: EvidencePack v2 verification is incomplete.".to_string(),
+            );
+        }
+    }
     run.status = match request.decision.as_str() {
         "accepted" | "accept" => "accepted".to_string(),
         "rework" | "rework_required" => "rework".to_string(),
@@ -711,7 +941,8 @@ pub fn read_slice(conn: &Connection, id: &str) -> Result<WorkSlice, String> {
 pub fn read_harness_run(conn: &Connection, id: &str) -> Result<HarnessRun, String> {
     conn.query_row(
         "select id, project_id, project_path, task_id, contract_id, status, current_stage, current_slice_id,
-         created_at, started_at, completed_at, last_error, compatibility_loop_run_id, manifest_path from harness_runs where id = ?1",
+         created_at, started_at, completed_at, last_error, compatibility_loop_run_id, manifest_path,
+         execution_identity_json from harness_runs where id = ?1",
         params![id],
         row_to_harness_run,
     )
@@ -807,8 +1038,9 @@ fn insert_harness_run(conn: &Connection, run: &HarnessRun) -> Result<(), String>
     conn.execute(
         "insert into harness_runs
          (id, project_id, project_path, task_id, contract_id, status, current_stage, current_slice_id,
-          created_at, started_at, completed_at, last_error, compatibility_loop_run_id, manifest_path)
-         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+          created_at, started_at, completed_at, last_error, compatibility_loop_run_id, manifest_path,
+          execution_identity_json)
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             run.id,
             run.project_id,
@@ -824,6 +1056,7 @@ fn insert_harness_run(conn: &Connection, run: &HarnessRun) -> Result<(), String>
             run.last_error,
             run.compatibility_loop_run_id,
             run.manifest_path,
+            to_json(&run.execution_identity)?,
         ],
     )
     .map_err(|err| err.to_string())?;
@@ -834,8 +1067,9 @@ fn insert_or_replace_pack(conn: &Connection, pack: &EvidencePack) -> Result<(), 
     conn.execute(
         "insert or replace into evidence_packs
          (id, project_id, project_path, task_id, contract_id, harness_run_id, status, manifest_path, report_path,
-          created_at, finalized_at, final_decision, refs_json)
-         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+          created_at, finalized_at, final_decision, refs_json, execution_identity_json, schema_version,
+          verification_json, mcp_activity_json, routing_activity_json, usage_json)
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         params![
             pack.id,
             pack.project_id,
@@ -850,6 +1084,12 @@ fn insert_or_replace_pack(conn: &Connection, pack: &EvidencePack) -> Result<(), 
             pack.finalized_at,
             pack.final_decision,
             serde_json::to_string(&pack.refs).map_err(|err| err.to_string())?,
+            to_json(&pack.execution_identity)?,
+            pack.schema_version,
+            to_json(&pack.verification)?,
+            to_json(&pack.mcp_activity)?,
+            to_json(&pack.routing_activity)?,
+            to_json(&pack.usage)?,
         ],
     )
     .map_err(|err| err.to_string())?;
@@ -947,7 +1187,8 @@ fn list_harness_runs(conn: &Connection, project_path: &str) -> Result<Vec<Harnes
     let mut stmt = conn
         .prepare(
             "select id, project_id, project_path, task_id, contract_id, status, current_stage, current_slice_id,
-             created_at, started_at, completed_at, last_error, compatibility_loop_run_id, manifest_path
+             created_at, started_at, completed_at, last_error, compatibility_loop_run_id, manifest_path,
+             execution_identity_json
              from harness_runs where project_path = ?1 order by created_at desc",
         )
         .map_err(|err| err.to_string())?;
@@ -961,7 +1202,9 @@ fn list_evidence_packs(conn: &Connection, project_path: &str) -> Result<Vec<Evid
     let mut stmt = conn
         .prepare(
             "select id, project_id, project_path, task_id, contract_id, harness_run_id, status, manifest_path, report_path,
-             created_at, finalized_at, final_decision, refs_json from evidence_packs where project_path = ?1 order by created_at desc",
+             created_at, finalized_at, final_decision, refs_json, execution_identity_json, schema_version,
+             verification_json, mcp_activity_json, routing_activity_json, usage_json
+             from evidence_packs where project_path = ?1 order by created_at desc",
         )
         .map_err(|err| err.to_string())?;
     let rows = stmt
@@ -977,7 +1220,9 @@ fn list_evidence_packs_for_run(
     let mut stmt = conn
         .prepare(
             "select id, project_id, project_path, task_id, contract_id, harness_run_id, status, manifest_path, report_path,
-             created_at, finalized_at, final_decision, refs_json from evidence_packs where harness_run_id = ?1 order by created_at desc",
+             created_at, finalized_at, final_decision, refs_json, execution_identity_json, schema_version,
+             verification_json, mcp_activity_json, routing_activity_json, usage_json
+             from evidence_packs where harness_run_id = ?1 order by created_at desc",
         )
         .map_err(|err| err.to_string())?;
     let rows = stmt
@@ -1066,11 +1311,13 @@ fn row_to_harness_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<HarnessRun> {
         last_error: row.get(11)?,
         compatibility_loop_run_id: row.get(12)?,
         manifest_path: row.get(13)?,
+        execution_identity: from_json_cell(row.get(14)?, 14)?,
     })
 }
 
 fn row_to_evidence_pack(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvidencePack> {
     Ok(EvidencePack {
+        schema_version: row.get(14)?,
         id: row.get(0)?,
         project_id: row.get(1)?,
         project_path: row.get(2)?,
@@ -1084,7 +1331,32 @@ fn row_to_evidence_pack(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvidencePac
         finalized_at: row.get(10)?,
         final_decision: row.get(11)?,
         refs: from_json_cell(row.get(12)?, 12)?,
+        execution_identity: from_json_cell(row.get(13)?, 13)?,
+        verification: from_json_cell(row.get(15)?, 15)?,
+        mcp_activity: from_json_cell(row.get(16)?, 16)?,
+        routing_activity: from_json_cell(row.get(17)?, 17)?,
+        usage: from_json_cell(row.get(18)?, 18)?,
     })
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    declaration: &str,
+) -> Result<(), String> {
+    let sql = format!("select count(*) from pragma_table_info('{table}') where name = ?1");
+    let count: i64 = conn
+        .query_row(&sql, params![column], |row| row.get(0))
+        .map_err(|err| err.to_string())?;
+    if count == 0 {
+        conn.execute(
+            &format!("alter table {table} add column {column} {declaration}"),
+            [],
+        )
+        .map_err(|err| err.to_string())?;
+    }
+    Ok(())
 }
 
 fn from_json_cell<T: DeserializeOwned>(value: String, column: usize) -> rusqlite::Result<T> {
@@ -1324,15 +1596,30 @@ fn write_evidence_report(path: &Path, pack: &EvidencePack) -> Result<(), String>
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
     let refs = serde_json::to_string_pretty(&pack.refs).map_err(|err| err.to_string())?;
+    let execution_identity =
+        serde_json::to_string_pretty(&pack.execution_identity).map_err(|err| err.to_string())?;
+    let verification =
+        serde_json::to_string_pretty(&pack.verification).map_err(|err| err.to_string())?;
+    let mcp_activity =
+        serde_json::to_string_pretty(&pack.mcp_activity).map_err(|err| err.to_string())?;
+    let routing_activity =
+        serde_json::to_string_pretty(&pack.routing_activity).map_err(|err| err.to_string())?;
+    let usage = serde_json::to_string_pretty(&pack.usage).map_err(|err| err.to_string())?;
     fs::write(
         path,
         format!(
-            "# Evidence Pack {}\n\nStatus: {}\n\nHarness run: {}\n\nContract: {}\n\nFinal decision: {}\n\n## References\n\n```json\n{}\n```\n",
+            "# Evidence Pack {}\n\nSchema version: {}\n\nStatus: {}\n\nHarness run: {}\n\nContract: {}\n\nFinal decision: {}\n\n## Verification\n\n```json\n{}\n```\n\n## Execution identity\n\n```json\n{}\n```\n\n## MCP activity\n\n```json\n{}\n```\n\n## Routing activity\n\n```json\n{}\n```\n\n## Provider usage\n\n```json\n{}\n```\n\n## References\n\n```json\n{}\n```\n",
             pack.id,
+            pack.schema_version,
             pack.status,
             pack.harness_run_id,
             pack.contract_id,
             if pack.final_decision.is_empty() { "pending" } else { &pack.final_decision },
+            verification,
+            execution_identity,
+            mcp_activity,
+            routing_activity,
+            usage,
             refs
         ),
     )
@@ -1448,6 +1735,18 @@ mod tests {
         }
     }
 
+    fn execution_identity_fixture() -> serde_json::Value {
+        serde_json::json!({
+            "schemaVersion": 1,
+            "routingPolicyId": "route-mock-only",
+            "legacyProviderStrategy": "mock_only",
+            "capturedAt": "1770000000000",
+            "providers": [],
+            "mcpServerIds": [],
+            "configChecksum": "dbc-fixture"
+        })
+    }
+
     fn approved_contract(conn: &Connection, project: &Path) -> TaskContract {
         let contract = create_task_contract(conn, contract_request(project)).unwrap();
         freeze_task_contract(conn, &contract.id).unwrap();
@@ -1497,6 +1796,35 @@ mod tests {
     }
 
     #[test]
+    fn schema_migrates_legacy_harness_tables_with_execution_identity() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "create table harness_runs (id text primary key);
+             create table evidence_packs (id text primary key);",
+        )
+        .unwrap();
+
+        ensure_schema(&conn).unwrap();
+        let harness_columns: i64 = conn
+            .query_row(
+                "select count(*) from pragma_table_info('harness_runs') where name = 'execution_identity_json'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let evidence_columns: i64 = conn
+            .query_row(
+                "select count(*) from pragma_table_info('evidence_packs') where name = 'execution_identity_json'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(harness_columns, 1);
+        assert_eq!(evidence_columns, 1);
+    }
+
+    #[test]
     fn approved_contract_can_create_slice_run_and_evidence_pack() {
         let project = temp_project("run");
         let conn = Connection::open_in_memory().unwrap();
@@ -1514,6 +1842,8 @@ mod tests {
                 task_id: "TASK-HARNESS".to_string(),
                 contract_id: contract.id.clone(),
                 work_slice_id: slice.id.clone(),
+                execution_identity: execution_identity_fixture(),
+                routing_simulation: serde_json::Value::Null,
             },
         )
         .unwrap();
@@ -1522,6 +1852,12 @@ mod tests {
 
         let pack = generate_evidence_pack(&conn, &run.id).unwrap();
         assert_eq!(pack.status, "ready");
+        assert_eq!(pack.schema_version, 2);
+        assert_eq!(pack.verification["complete"], true);
+        assert_eq!(pack.mcp_activity["status"], "not_used");
+        assert_eq!(pack.usage["status"], "unknown");
+        assert_eq!(pack.execution_identity, run.execution_identity);
+        assert_eq!(pack.refs["executionIdentityChecksum"], "dbc-fixture");
         assert!(Path::new(&pack.manifest_path).exists());
         assert!(Path::new(&pack.report_path).exists());
 
@@ -1563,6 +1899,8 @@ mod tests {
                 task_id: "OTHER-TASK".to_string(),
                 contract_id: contract.id.clone(),
                 work_slice_id: slice.id.clone(),
+                execution_identity: execution_identity_fixture(),
+                routing_simulation: serde_json::Value::Null,
             },
         );
         assert!(wrong_run.is_err());
@@ -1585,6 +1923,8 @@ mod tests {
                 task_id: contract.task_id.clone(),
                 contract_id: contract.id.clone(),
                 work_slice_id: slice.id.clone(),
+                execution_identity: execution_identity_fixture(),
+                routing_simulation: serde_json::Value::Null,
             },
         )
         .unwrap();
@@ -1613,6 +1953,46 @@ mod tests {
     }
 
     #[test]
+    fn acceptance_rejects_mismatched_execution_identity() {
+        let project = temp_project("identity-mismatch");
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        let contract = approved_contract(&conn, &project);
+        let slice = approved_slice(&conn, &project, &contract);
+        let run = create_harness_run(
+            &conn,
+            HarnessRunRequest {
+                project_id: contract.project_id.clone(),
+                project_path: project.display().to_string(),
+                task_id: contract.task_id.clone(),
+                contract_id: contract.id.clone(),
+                work_slice_id: slice.id.clone(),
+                execution_identity: execution_identity_fixture(),
+                routing_simulation: serde_json::Value::Null,
+            },
+        )
+        .unwrap();
+        generate_evidence_pack(&conn, &run.id).unwrap();
+        conn.execute(
+            "update evidence_packs set execution_identity_json = '{\"configChecksum\":\"different\"}' where harness_run_id = ?1",
+            params![run.id],
+        )
+        .unwrap();
+
+        let result = accept_or_rework(
+            &conn,
+            FinalDecisionRequest {
+                harness_run_id: run.id,
+                decision: "accepted".to_string(),
+                note: "Must not pass.".to_string(),
+            },
+        );
+        assert!(result.is_err());
+
+        fs::remove_dir_all(project).ok();
+    }
+
+    #[test]
     fn loop_state_updates_harness_and_slice_lifecycle() {
         let project = temp_project("lifecycle");
         let conn = Connection::open_in_memory().unwrap();
@@ -1627,6 +2007,8 @@ mod tests {
                 task_id: contract.task_id.clone(),
                 contract_id: contract.id.clone(),
                 work_slice_id: slice.id.clone(),
+                execution_identity: execution_identity_fixture(),
+                routing_simulation: serde_json::Value::Null,
             },
         )
         .unwrap();

@@ -2,11 +2,12 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::env;
-use std::fs;
-use std::io::Write;
+use std::fs::{self, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{sync::mpsc, thread};
 use tauri::Manager;
 
 mod harness;
@@ -31,6 +32,14 @@ struct CliHealthResult {
     status: String,
     detail: String,
     version_output: String,
+    provider_kind: String,
+    resolved_command: String,
+    detected_version: String,
+    compatibility_status: String,
+    auth_status: String,
+    auth_detail: String,
+    read_only_ready: bool,
+    recovery_action: String,
 }
 
 #[derive(Serialize)]
@@ -39,6 +48,70 @@ struct CliCandidate {
     source: String,
     version_output: String,
     status: String,
+}
+
+#[derive(Deserialize)]
+struct McpConnectionCheckRequest {
+    transport: String,
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    url: String,
+    auth_mode: String,
+    secret_ref: String,
+    oauth_status: String,
+    tool_policy_id: String,
+    timeout_seconds: u64,
+}
+
+#[derive(Serialize)]
+struct McpConnectionCheckResult {
+    status: String,
+    detail: String,
+    transport: String,
+    resolved_command: String,
+    protocol_version: String,
+    server_version: String,
+    tools: Vec<serde_json::Value>,
+    auth_status: String,
+    recovery_action: String,
+    diagnostics: Vec<ProjectConfigDiagnostic>,
+}
+
+#[derive(Deserialize)]
+struct McpToolCallPolicyRequest {
+    project_path: String,
+    run_id: String,
+    connection_id: String,
+    policy: serde_json::Value,
+    tool: serde_json::Value,
+    #[serde(default)]
+    arguments: serde_json::Value,
+    idempotency_key: String,
+    attempt: u64,
+    approval_granted: bool,
+}
+
+#[derive(Deserialize)]
+struct McpApprovalRecordRequest {
+    project_path: String,
+    id: String,
+    run_id: String,
+    connection_id: String,
+    tool_name: String,
+    status: String,
+}
+
+#[derive(Deserialize)]
+struct SecretRefCheckRequest {
+    secret_ref: String,
+}
+
+#[derive(Serialize)]
+struct SecretRefCheckResult {
+    status: String,
+    detail: String,
+    provider: String,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +152,7 @@ struct CliRunResult {
     duration_ms: u128,
     decision: String,
     redacted_output: String,
+    stream_report: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -117,6 +191,8 @@ struct StartLoopRequest {
     task_spec_checksum: String,
     memory_context: String,
     memory_refs: Vec<String>,
+    #[serde(default)]
+    routing_simulation: serde_json::Value,
     steps: Vec<LoopStepInput>,
 }
 
@@ -144,6 +220,8 @@ struct TaskSpecRequest {
     loop_profile: String,
     #[serde(default = "default_provider_strategy")]
     provider_strategy: String,
+    #[serde(default = "default_routing_policy_id")]
+    routing_policy_id: String,
     affected_paths: Vec<String>,
     #[serde(default)]
     allowed_paths: Vec<String>,
@@ -192,6 +270,12 @@ struct ProjectConfigRequest {
     project_path: String,
     providers: serde_json::Value,
     command_policy: serde_json::Value,
+    #[serde(default)]
+    mcp_servers: serde_json::Value,
+    #[serde(default)]
+    tool_policies: serde_json::Value,
+    #[serde(default)]
+    model_catalog: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -210,6 +294,9 @@ struct ProjectConfigRecord {
 struct ProjectConfigResult {
     providers: ProjectConfigRecord,
     policy: ProjectConfigRecord,
+    mcp_connections: ProjectConfigRecord,
+    tool_policies: ProjectConfigRecord,
+    model_catalog: ProjectConfigRecord,
 }
 
 #[derive(Serialize)]
@@ -223,8 +310,14 @@ struct ProjectConfigDiagnostic {
 struct ProjectConfigLoadResult {
     providers: serde_json::Value,
     command_policy: serde_json::Value,
+    mcp_servers: serde_json::Value,
+    tool_policies: serde_json::Value,
+    model_catalog: serde_json::Value,
     providers_record: Option<ProjectConfigRecord>,
     policy_record: Option<ProjectConfigRecord>,
+    mcp_connections_record: Option<ProjectConfigRecord>,
+    tool_policies_record: Option<ProjectConfigRecord>,
+    model_catalog_record: Option<ProjectConfigRecord>,
     diagnostics: Vec<ProjectConfigDiagnostic>,
 }
 
@@ -232,6 +325,9 @@ struct ProjectConfigLoadResult {
 struct ProjectRecoveryResult {
     providers: serde_json::Value,
     command_policy: serde_json::Value,
+    mcp_servers: serde_json::Value,
+    tool_policies: serde_json::Value,
+    model_catalog: serde_json::Value,
     tasks: Vec<serde_json::Value>,
     memory: Vec<serde_json::Value>,
     loops: Vec<LoopRunSummary>,
@@ -446,12 +542,25 @@ fn classify_command(command: String) -> String {
 }
 
 #[tauri::command]
-fn test_cli_provider(command: String, version_args: Vec<String>) -> CliHealthResult {
+fn test_cli_provider(
+    command: String,
+    version_args: Vec<String>,
+    args_template: String,
+) -> CliHealthResult {
+    let provider_kind = provider_kind_from_command(&command).to_string();
     if command.trim().is_empty() {
         return CliHealthResult {
             status: "failed".to_string(),
             detail: "Command is empty.".to_string(),
             version_output: String::new(),
+            provider_kind,
+            resolved_command: String::new(),
+            detected_version: String::new(),
+            compatibility_status: "unknown".to_string(),
+            auth_status: "unknown".to_string(),
+            auth_detail: "No command was available for the auth presence probe.".to_string(),
+            read_only_ready: false,
+            recovery_action: "Set an exact CLI command path, then test again.".to_string(),
         };
     }
 
@@ -471,6 +580,16 @@ fn test_cli_provider(command: String, version_args: Vec<String>) -> CliHealthRes
                     command.trim()
                 ),
                 version_output: String::new(),
+                provider_kind,
+                resolved_command: String::new(),
+                detected_version: String::new(),
+                compatibility_status: "capability_missing".to_string(),
+                auth_status: "unknown".to_string(),
+                auth_detail: "Auth was not checked because the executable is unavailable."
+                    .to_string(),
+                read_only_ready: false,
+                recovery_action: "Install the official CLI or paste its exact executable path."
+                    .to_string(),
             }
         }
     };
@@ -480,33 +599,1224 @@ fn test_cli_provider(command: String, version_args: Vec<String>) -> CliHealthRes
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             let version_output = trim_output(&(stdout + &stderr), 8000);
+            let detected_version = detect_semver(&version_output);
+            let (compatibility_status, compatibility_detail) = probe_cli_compatibility(
+                &provider_kind,
+                &resolved_command,
+                &detected_version,
+                output.status.success(),
+            );
+            let (auth_status, auth_detail) = probe_provider_auth_presence(&provider_kind);
+            let safe_template = provider_read_only_template_ready(&provider_kind, &args_template);
+            let read_only_ready = output.status.success()
+                && compatibility_status == "supported"
+                && (auth_status == "present" || auth_status == "not_required")
+                && safe_template;
+            let recovery_action = provider_recovery_action(
+                &provider_kind,
+                &compatibility_status,
+                &auth_status,
+                safe_template,
+            );
+            let status = if !output.status.success()
+                || compatibility_status == "capability_missing"
+                || compatibility_status == "unsupported_version"
+            {
+                "failed"
+            } else if !read_only_ready && matches!(provider_kind.as_str(), "kimi" | "qwen") {
+                "warning"
+            } else {
+                "ok"
+            };
             CliHealthResult {
-                status: if output.status.success() {
-                    "ok"
-                } else {
-                    "warning"
-                }
-                .to_string(),
-                detail: if output.status.success() {
-                    format!(
-                        "Command is available at {} and version check succeeded.",
-                        resolved_command.display()
-                    )
-                } else {
-                    format!(
-                        "Command was found at {}, but version check returned a non-zero exit code.",
-                        resolved_command.display()
-                    )
-                },
+                status: status.to_string(),
+                detail: format!(
+                    "Command resolved at {}. {}",
+                    resolved_command.display(),
+                    compatibility_detail
+                ),
                 version_output,
+                provider_kind,
+                resolved_command: resolved_command.display().to_string(),
+                detected_version,
+                compatibility_status,
+                auth_status,
+                auth_detail,
+                read_only_ready,
+                recovery_action,
             }
         }
         Err(err) => CliHealthResult {
             status: "failed".to_string(),
             detail: format!("Command failed to start: {err}"),
             version_output: String::new(),
+            provider_kind,
+            resolved_command: resolved_command.display().to_string(),
+            detected_version: String::new(),
+            compatibility_status: "capability_missing".to_string(),
+            auth_status: "unknown".to_string(),
+            auth_detail: "Auth was not checked because the version probe failed.".to_string(),
+            read_only_ready: false,
+            recovery_action: "Repair the CLI installation, then test again.".to_string(),
         },
     }
+}
+
+fn provider_kind_from_command(command: &str) -> &'static str {
+    if is_kimi_command(command) {
+        "kimi"
+    } else if is_qwen_command(command) {
+        "qwen"
+    } else if is_codex_command(command) {
+        "codex"
+    } else if is_claude_command(command) {
+        "claude"
+    } else {
+        "generic"
+    }
+}
+
+fn detect_semver(text: &str) -> String {
+    for token in text.split(|character: char| {
+        !character.is_ascii_digit() && character != '.' && character != '-'
+    }) {
+        let candidate = token.trim_matches('-');
+        let numeric = candidate.split('-').next().unwrap_or(candidate);
+        let parts = numeric.split('.').collect::<Vec<_>>();
+        if parts.len() >= 2
+            && parts
+                .iter()
+                .all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit()))
+        {
+            return numeric.to_string();
+        }
+    }
+    String::new()
+}
+
+fn semver_at_least(version: &str, minimum: &str) -> bool {
+    let parse = |value: &str| {
+        value
+            .split('.')
+            .take(3)
+            .map(|part| part.parse::<u64>().unwrap_or(0))
+            .chain(std::iter::repeat(0))
+            .take(3)
+            .collect::<Vec<_>>()
+    };
+    parse(version) >= parse(minimum)
+}
+
+fn probe_cli_compatibility(
+    provider_kind: &str,
+    resolved_command: &Path,
+    detected_version: &str,
+    version_probe_succeeded: bool,
+) -> (String, String) {
+    if !version_probe_succeeded {
+        return (
+            "capability_missing".to_string(),
+            "The version command returned a non-zero exit code.".to_string(),
+        );
+    }
+
+    let required_flags: &[&str] = match provider_kind {
+        "kimi" => &["--prompt", "--output-format", "--plan"],
+        "qwen" => &[
+            "--prompt",
+            "--output-format",
+            "--approval-mode",
+            "--safe-mode",
+            "--max-tool-calls",
+        ],
+        _ => &[],
+    };
+    if required_flags.is_empty() {
+        return (
+            "supported".to_string(),
+            "The version check succeeded.".to_string(),
+        );
+    }
+    if provider_kind == "kimi"
+        && (detected_version.is_empty() || !semver_at_least(detected_version, "0.21.0"))
+    {
+        return (
+            "unsupported_version".to_string(),
+            format!(
+                "Kimi Code {} is below the required stream-json baseline 0.21.0.",
+                if detected_version.is_empty() {
+                    "version could not be detected"
+                } else {
+                    detected_version
+                }
+            ),
+        );
+    }
+
+    match Command::new(resolved_command).arg("--help").output() {
+        Ok(output) => {
+            let help = String::from_utf8_lossy(&output.stdout).to_string()
+                + &String::from_utf8_lossy(&output.stderr);
+            let missing = required_flags
+                .iter()
+                .filter(|flag| !help.contains(**flag))
+                .copied()
+                .collect::<Vec<_>>();
+            if output.status.success() && missing.is_empty() {
+                (
+                    "supported".to_string(),
+                    format!(
+                        "The installed {provider_kind} CLI exposes the required read-only headless contract."
+                    ),
+                )
+            } else {
+                (
+                    "capability_missing".to_string(),
+                    format!(
+                        "The installed {provider_kind} CLI is missing required flags: {}.",
+                        missing.join(", ")
+                    ),
+                )
+            }
+        }
+        Err(err) => (
+            "capability_missing".to_string(),
+            format!("The {provider_kind} help probe failed: {err}"),
+        ),
+    }
+}
+
+fn probe_provider_auth_presence(provider_kind: &str) -> (String, String) {
+    let home = env::var_os("HOME").map(PathBuf::from);
+    let present = match provider_kind {
+        "kimi" => {
+            env::var_os("KIMI_SHARE_DIR").is_some()
+                || home
+                    .as_ref()
+                    .map(|path| path.join(".kimi").exists())
+                    .unwrap_or(false)
+        }
+        "qwen" => {
+            [
+                "BAILIAN_CODING_PLAN_API_KEY",
+                "OPENAI_API_KEY",
+                "DASHSCOPE_API_KEY",
+                "ANTHROPIC_API_KEY",
+                "GEMINI_API_KEY",
+            ]
+            .iter()
+            .any(|name| env::var_os(name).is_some())
+                || home
+                    .as_ref()
+                    .map(|path| path.join(".qwen").join("settings.json").exists())
+                    .unwrap_or(false)
+        }
+        "codex" => home
+            .as_ref()
+            .map(|path| path.join(".codex").join("auth.json").exists())
+            .unwrap_or(false),
+        "claude" => home
+            .as_ref()
+            .map(|path| path.join(".claude").exists() || path.join(".claude.json").exists())
+            .unwrap_or(false),
+        _ => {
+            return (
+                "not_required".to_string(),
+                "No external auth probe is required.".to_string(),
+            )
+        }
+    };
+    if present {
+        (
+            "present".to_string(),
+            "Official CLI auth/config presence was detected without reading secret contents."
+                .to_string(),
+        )
+    } else {
+        (
+            "missing".to_string(),
+            "Official CLI auth/config presence was not detected; secret contents were not read."
+                .to_string(),
+        )
+    }
+}
+
+fn provider_read_only_template_ready(provider_kind: &str, args_template: &str) -> bool {
+    match provider_kind {
+        // Kimi print mode auto-approves tool calls. The adapter stays blocked until DBC
+        // can mediate tools through the policy proxy.
+        "kimi" => false,
+        "qwen" => qwen_read_only_args_ready(&split_command_line(args_template)),
+        _ => true,
+    }
+}
+
+fn provider_recovery_action(
+    provider_kind: &str,
+    compatibility_status: &str,
+    auth_status: &str,
+    safe_template: bool,
+) -> String {
+    if compatibility_status != "supported" {
+        return match provider_kind {
+            "kimi" => "Upgrade Kimi Code to 0.21.0 or newer, then recheck the CLI contract.",
+            "qwen" => {
+                "Upgrade Qwen Code until its help exposes stream-json, safe-mode, and tool budgets."
+            }
+            _ => "Repair or upgrade the CLI, then test again.",
+        }
+        .to_string();
+    }
+    if auth_status == "missing" {
+        return match provider_kind {
+            "kimi" => "Run `kimi login` in a human-operated terminal, then test again.",
+            "qwen" => "Configure an official Qwen API-key provider in settings or environment, then test again.",
+            "codex" => "Authenticate the Codex CLI, then test again.",
+            "claude" => "Authenticate Claude Code, then test again.",
+            _ => "Authenticate the provider, then test again.",
+        }
+        .to_string();
+    }
+    if !safe_template {
+        return match provider_kind {
+            "kimi" => {
+                "Keep real execution disabled until the DBC MCP/tool policy proxy is implemented."
+            }
+            "qwen" => "Apply the DBC Qwen read-only template with safe-mode and max-tool-calls 0.",
+            _ => "Apply the provider read-only template.",
+        }
+        .to_string();
+    }
+    "Provider is ready for the bounded read-only profile.".to_string()
+}
+
+#[tauri::command]
+fn test_mcp_connection(request: McpConnectionCheckRequest) -> McpConnectionCheckResult {
+    let mut diagnostics = Vec::new();
+    let auth_status = match request.auth_mode.as_str() {
+        "none" => "not_required",
+        "oauth" if request.oauth_status == "connected" => "present",
+        "secret_ref"
+            if request.secret_ref.starts_with("keychain:")
+                || request.secret_ref.starts_with("secret:")
+                || request.secret_ref.starts_with("env:") =>
+        {
+            "present"
+        }
+        _ => "missing",
+    }
+    .to_string();
+
+    if request.tool_policy_id.trim().is_empty() {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "tool-policy".to_string(),
+            detail: "MCP discovery requires a tool policy.".to_string(),
+        });
+    }
+    if auth_status == "missing" {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "warning".to_string(),
+            subject: "auth".to_string(),
+            detail: "Authentication reference is missing or not connected.".to_string(),
+        });
+    }
+    if request.transport != "stdio" {
+        if !(request.url.starts_with("http://") || request.url.starts_with("https://")) {
+            diagnostics.push(ProjectConfigDiagnostic {
+                level: "error".to_string(),
+                subject: "url".to_string(),
+                detail: "Streamable HTTP/SSE requires an http(s) URL.".to_string(),
+            });
+        }
+        if request.transport == "sse_legacy" {
+            diagnostics.push(ProjectConfigDiagnostic {
+                level: "warning".to_string(),
+                subject: "transport".to_string(),
+                detail: "SSE is a legacy import transport; prefer Streamable HTTP.".to_string(),
+            });
+        }
+        let failed = diagnostics.iter().any(|item| item.level == "error");
+        return McpConnectionCheckResult {
+            status: if failed { "failed" } else { "warning" }.to_string(),
+            detail: if failed {
+                "Remote MCP configuration is invalid.".to_string()
+            } else {
+                "Remote MCP contract is valid. Live HTTP discovery remains blocked until the OS secret store can resolve auth references."
+                    .to_string()
+            },
+            transport: request.transport,
+            resolved_command: String::new(),
+            protocol_version: String::new(),
+            server_version: String::new(),
+            tools: Vec::new(),
+            auth_status,
+            recovery_action: if failed {
+                "Fix URL, transport, auth reference, and policy fields.".to_string()
+            } else {
+                "Connect OS keychain/OAuth, then run live Streamable HTTP discovery.".to_string()
+            },
+            diagnostics,
+        };
+    }
+
+    if request.command.trim().is_empty() {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "command".to_string(),
+            detail: "stdio MCP connection requires a command.".to_string(),
+        });
+        return mcp_failed_result(
+            request,
+            auth_status,
+            diagnostics,
+            "Set a stdio server command.",
+        );
+    }
+    let resolved_command = match resolve_executable(request.command.trim()) {
+        Some(path) => path,
+        None => {
+            diagnostics.push(ProjectConfigDiagnostic {
+                level: "error".to_string(),
+                subject: "command".to_string(),
+                detail: format!("MCP executable was not found: {}", request.command),
+            });
+            return mcp_failed_result(
+                request,
+                auth_status,
+                diagnostics,
+                "Install the MCP server or paste its exact executable path.",
+            );
+        }
+    };
+
+    let mut child = match Command::new(&resolved_command)
+        .args(request.args.iter())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(err) => {
+            diagnostics.push(ProjectConfigDiagnostic {
+                level: "error".to_string(),
+                subject: "spawn".to_string(),
+                detail: format!("MCP server failed to start: {err}"),
+            });
+            return mcp_failed_result(
+                request,
+                auth_status,
+                diagnostics,
+                "Repair the stdio server command, then test again.",
+            );
+        }
+    };
+
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "stdio".to_string(),
+            detail: "MCP server stdout is unavailable.".to_string(),
+        });
+        return mcp_failed_result(request, auth_status, diagnostics, "Repair stdio output.");
+    };
+    let (sender, receiver) = mpsc::channel::<serde_json::Value>();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim()) {
+                let _ = sender.send(value);
+            }
+        }
+    });
+    let Some(mut stdin) = child.stdin.take() else {
+        let _ = child.kill();
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "stdio".to_string(),
+            detail: "MCP server stdin is unavailable.".to_string(),
+        });
+        return mcp_failed_result(request, auth_status, diagnostics, "Repair stdio input.");
+    };
+
+    let modern_discover = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "server/discover",
+        "params": {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {"name": "dbc", "version": "0.1.1"},
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }
+        }
+    });
+    let _ = writeln!(stdin, "{modern_discover}");
+    let _ = stdin.flush();
+    let timeout = Duration::from_secs(request.timeout_seconds.clamp(1, 30));
+    let modern_wait = timeout.min(Duration::from_millis(800));
+    let modern_response = receive_mcp_response(&receiver, 1, modern_wait);
+
+    let (protocol_version, server_version, tools_response) = if modern_response
+        .as_ref()
+        .and_then(|value| value.get("result"))
+        .is_some()
+    {
+        let discover = modern_response.unwrap_or_default();
+        let supported = discover
+            .pointer("/result/supportedProtocolVersions")
+            .or_else(|| discover.pointer("/result/protocolVersions"))
+            .and_then(|value| value.as_array())
+            .map(|versions| {
+                versions
+                    .iter()
+                    .filter_map(|value| value.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let version = if supported.contains(&"2026-07-28") {
+            "2026-07-28"
+        } else {
+            supported.first().copied().unwrap_or("2026-07-28")
+        };
+        let request_tools = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": version,
+                    "io.modelcontextprotocol/clientInfo": {"name": "dbc", "version": "0.1.1"},
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                }
+            }
+        });
+        let _ = writeln!(stdin, "{request_tools}");
+        let _ = stdin.flush();
+        (
+            version.to_string(),
+            discover
+                .pointer("/result/serverInfo/version")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_string(),
+            receive_mcp_response(&receiver, 2, timeout),
+        )
+    } else {
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "dbc", "version": "0.1.1"}
+            }
+        });
+        let _ = writeln!(stdin, "{initialize}");
+        let _ = stdin.flush();
+        let initialized = receive_mcp_response(&receiver, 3, timeout);
+        let version = initialized
+            .as_ref()
+            .and_then(|value| value.pointer("/result/protocolVersion"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("2025-11-25")
+            .to_string();
+        let server = initialized
+            .as_ref()
+            .and_then(|value| value.pointer("/result/serverInfo/version"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string();
+        if initialized.is_some() {
+            let notification = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {}
+            });
+            let tools = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/list",
+                "params": {}
+            });
+            let _ = writeln!(stdin, "{notification}");
+            let _ = writeln!(stdin, "{tools}");
+            let _ = stdin.flush();
+        }
+        (version, server, receive_mcp_response(&receiver, 4, timeout))
+    };
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let Some(tools_response) = tools_response else {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "tools/list".to_string(),
+            detail: "MCP server did not return tools/list before the timeout.".to_string(),
+        });
+        return McpConnectionCheckResult {
+            status: "failed".to_string(),
+            detail: "MCP handshake or tool discovery timed out.".to_string(),
+            transport: request.transport,
+            resolved_command: resolved_command.display().to_string(),
+            protocol_version,
+            server_version,
+            tools: Vec::new(),
+            auth_status,
+            recovery_action: "Check server logs, protocol compatibility, and startup arguments."
+                .to_string(),
+            diagnostics,
+        };
+    };
+    if let Some(error) = tools_response.get("error") {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "tools/list".to_string(),
+            detail: format!("MCP server returned an error: {error}"),
+        });
+    }
+    let discovered_at = unix_millis().to_string();
+    let tools = tools_response
+        .pointer("/result/tools")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let name = item.get("name")?.as_str()?.to_string();
+                    let description = item
+                        .get("description")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let input_schema = item
+                        .get("inputSchema")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    Some(serde_json::json!({
+                        "name": name,
+                        "description": description,
+                        "inputSchema": input_schema,
+                        "intent": classify_mcp_tool_intent(&name, &description, &input_schema),
+                        "discoveredAt": discovered_at,
+                    }))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    diagnostics.push(ProjectConfigDiagnostic {
+        level: "ok".to_string(),
+        subject: "mcp-discovery".to_string(),
+        detail: format!(
+            "Negotiated protocol {protocol_version}; discovered {} tool(s).",
+            tools.len()
+        ),
+    });
+    let failed = diagnostics.iter().any(|item| item.level == "error");
+    McpConnectionCheckResult {
+        status: if failed {
+            "failed"
+        } else if auth_status == "missing" {
+            "warning"
+        } else {
+            "ok"
+        }
+        .to_string(),
+        detail: format!(
+            "MCP stdio server responded at {} with {} tool(s).",
+            resolved_command.display(),
+            tools.len()
+        ),
+        transport: request.transport,
+        resolved_command: resolved_command.display().to_string(),
+        protocol_version,
+        server_version,
+        tools,
+        auth_status,
+        recovery_action: if failed {
+            "Repair the MCP server contract and test again."
+        } else {
+            "Review every discovered tool intent and policy decision before enabling."
+        }
+        .to_string(),
+        diagnostics,
+    }
+}
+
+fn mcp_failed_result(
+    request: McpConnectionCheckRequest,
+    auth_status: String,
+    diagnostics: Vec<ProjectConfigDiagnostic>,
+    recovery_action: &str,
+) -> McpConnectionCheckResult {
+    McpConnectionCheckResult {
+        status: "failed".to_string(),
+        detail: "MCP connection check failed.".to_string(),
+        transport: request.transport,
+        resolved_command: String::new(),
+        protocol_version: String::new(),
+        server_version: String::new(),
+        tools: Vec::new(),
+        auth_status,
+        recovery_action: recovery_action.to_string(),
+        diagnostics,
+    }
+}
+
+fn receive_mcp_response(
+    receiver: &mpsc::Receiver<serde_json::Value>,
+    id: i64,
+    timeout: Duration,
+) -> Option<serde_json::Value> {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        let remaining = timeout.saturating_sub(started.elapsed());
+        match receiver.recv_timeout(remaining.min(Duration::from_millis(100))) {
+            Ok(value) if value.get("id").and_then(|item| item.as_i64()) == Some(id) => {
+                return Some(value)
+            }
+            Ok(_) => continue,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    None
+}
+
+fn classify_mcp_tool_intent(
+    name: &str,
+    description: &str,
+    input_schema: &serde_json::Value,
+) -> &'static str {
+    let value = format!("{name} {description} {input_schema}").to_lowercase();
+    if [
+        "delete",
+        "destroy",
+        "drop",
+        "erase",
+        "remove_all",
+        "reset",
+        "format",
+    ]
+    .iter()
+    .any(|needle| value.contains(needle))
+    {
+        "destructive"
+    } else if [
+        "secret",
+        "credential",
+        "token",
+        "password",
+        "private_key",
+        ".env",
+    ]
+    .iter()
+    .any(|needle| value.contains(needle))
+    {
+        "sensitive_read"
+    } else if [
+        "http", "network", "fetch", "deploy", "publish", "send", "upload",
+    ]
+    .iter()
+    .any(|needle| value.contains(needle))
+    {
+        "network"
+    } else if [
+        "write", "edit", "create", "update", "patch", "insert", "rename",
+    ]
+    .iter()
+    .any(|needle| value.contains(needle))
+    {
+        "write"
+    } else if ["read", "get", "list", "search", "find", "inspect", "query"]
+        .iter()
+        .any(|needle| value.contains(needle))
+    {
+        "read"
+    } else {
+        "unknown"
+    }
+}
+
+#[tauri::command]
+fn evaluate_mcp_tool_call(request: McpToolCallPolicyRequest) -> Result<serde_json::Value, String> {
+    if request.run_id.trim().is_empty() || request.connection_id.trim().is_empty() {
+        return Err("MCP policy evaluation requires run and connection identifiers.".to_string());
+    }
+    if request.idempotency_key.trim().is_empty() {
+        return Err("MCP side-effect evaluation requires an idempotency key.".to_string());
+    }
+    let project = PathBuf::from(&request.project_path);
+    if !project.is_dir() {
+        return Err("MCP policy project path does not exist or is not a directory.".to_string());
+    }
+    let policy_id = request
+        .policy
+        .get("id")
+        .and_then(|value| value.as_str())
+        .unwrap_or("missing-policy");
+    let tool_name = request
+        .tool
+        .get("name")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    let tool_description = request
+        .tool
+        .get("description")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let input_schema = request
+        .tool
+        .get("inputSchema")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let configured_intent = request
+        .tool
+        .get("intent")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    let intent = if configured_intent == "unknown" {
+        classify_mcp_tool_intent(tool_name, tool_description, &input_schema)
+    } else {
+        configured_intent
+    };
+
+    let evidence_dir = project.join(".dbc").join("evidence").join("mcp");
+    fs::create_dir_all(&evidence_dir).map_err(|err| err.to_string())?;
+    let evidence_path = evidence_dir.join(format!("{}.jsonl", sanitize_file_stem(&request.run_id)));
+    let prior = fs::read_to_string(&evidence_path).unwrap_or_default();
+    let prior_items = prior
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .collect::<Vec<_>>();
+    let duplicate = prior_items.iter().any(|item| {
+        item.get("connectionId").and_then(|value| value.as_str())
+            == Some(request.connection_id.as_str())
+            && item.get("idempotencyKey").and_then(|value| value.as_str())
+                == Some(request.idempotency_key.as_str())
+            && item
+                .get("shouldExecute")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+    });
+
+    let max_calls = request
+        .policy
+        .get("maxCallsPerRun")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(1)
+        .max(1);
+    let max_retries = request
+        .policy
+        .get("maxRetries")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let policy_enabled = request
+        .policy
+        .get("enabled")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let allowed_tools = mcp_json_string_array(&request.policy, "allowedTools");
+    let denied_tools = mcp_json_string_array(&request.policy, "deniedTools");
+    let allowed_paths = mcp_json_string_array(&request.policy, "allowedPaths");
+    let denied_paths = mcp_json_string_array(&request.policy, "deniedPaths");
+    let allow_network = request
+        .policy
+        .get("allowNetwork")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let allow_sensitive_data = request
+        .policy
+        .get("allowSensitiveData")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let write_decision = json_string_field(&request.policy, "writeDecision", "deny");
+    let network_decision = json_string_field(&request.policy, "networkDecision", "deny");
+    let destructive_decision = json_string_field(&request.policy, "destructiveDecision", "deny");
+    let (observed_paths, observed_hosts, sensitive_keys) =
+        inspect_mcp_arguments(&request.arguments);
+
+    let (mut decision, mut reason) = if duplicate {
+        (
+            "allow".to_string(),
+            "Idempotency reservation already exists; replay without another side effect."
+                .to_string(),
+        )
+    } else if !policy_enabled {
+        ("deny".to_string(), "Tool policy is disabled.".to_string())
+    } else if denied_tools.iter().any(|item| item == tool_name) {
+        ("deny".to_string(), "Tool is explicitly denied.".to_string())
+    } else if !allowed_tools.is_empty() && !allowed_tools.iter().any(|item| item == tool_name) {
+        (
+            "deny".to_string(),
+            "Tool is not in the explicit allowlist.".to_string(),
+        )
+    } else if prior_items.len() >= max_calls as usize {
+        (
+            "deny".to_string(),
+            format!("Run call limit {max_calls} is exhausted."),
+        )
+    } else if request.attempt.max(1) > max_retries + 1 {
+        (
+            "deny".to_string(),
+            format!("Retry limit {max_retries} is exhausted."),
+        )
+    } else if observed_paths.iter().any(|path| path.contains("..")) {
+        (
+            "deny".to_string(),
+            "Path traversal is forbidden by the MCP proxy.".to_string(),
+        )
+    } else if let Some(path) = observed_paths
+        .iter()
+        .find(|path| mcp_path_matches_any(path, &denied_paths, &request.project_path))
+    {
+        (
+            "deny".to_string(),
+            format!("Path is denied by policy: {path}."),
+        )
+    } else if !observed_paths.is_empty()
+        && !allowed_paths.is_empty()
+        && observed_paths
+            .iter()
+            .any(|path| !mcp_path_matches_any(path, &allowed_paths, &request.project_path))
+    {
+        (
+            "deny".to_string(),
+            "At least one path is outside the policy allowlist.".to_string(),
+        )
+    } else if !sensitive_keys.is_empty() && !allow_sensitive_data {
+        (
+            "deny".to_string(),
+            format!(
+                "Sensitive argument fields are forbidden: {}.",
+                sensitive_keys.join(", ")
+            ),
+        )
+    } else if !observed_hosts.is_empty() && !allow_network {
+        (
+            "deny".to_string(),
+            format!(
+                "Network egress is disabled; observed host(s): {}.",
+                observed_hosts.join(", ")
+            ),
+        )
+    } else if !observed_hosts.is_empty() || intent == "network" {
+        (
+            network_decision,
+            "Tool or arguments can cause network egress.".to_string(),
+        )
+    } else if intent == "destructive" {
+        (
+            destructive_decision,
+            "Tool is classified as destructive.".to_string(),
+        )
+    } else if intent == "sensitive_read" && !allow_sensitive_data {
+        (
+            "deny".to_string(),
+            "Policy forbids sensitive-data reads.".to_string(),
+        )
+    } else if intent == "write" {
+        (
+            write_decision,
+            "Tool can modify workspace or external state.".to_string(),
+        )
+    } else if intent == "unknown" {
+        (
+            "approval_required".to_string(),
+            "Tool intent is unknown.".to_string(),
+        )
+    } else {
+        (
+            "allow".to_string(),
+            "Read-only tool is allowed by policy.".to_string(),
+        )
+    };
+
+    if decision == "approval_required" && request.approval_granted {
+        decision = "allow".to_string();
+        reason.push_str(" Run-scoped approval is recorded.");
+    }
+    let should_execute = decision == "allow" && !duplicate;
+    let created_at = unix_millis().to_string();
+    let serialized_arguments =
+        serde_json::to_string(&request.arguments).map_err(|err| err.to_string())?;
+    let argument_checksum = stable_checksum(&serialized_arguments);
+    let evidence = serde_json::json!({
+        "schemaVersion": 1,
+        "id": format!("MCP-{}-{}", created_at, stable_checksum(&format!("{}:{}", request.run_id, request.idempotency_key))),
+        "runId": request.run_id,
+        "connectionId": request.connection_id,
+        "policyId": policy_id,
+        "toolName": tool_name,
+        "intent": intent,
+        "decision": decision,
+        "reason": reason,
+        "shouldExecute": should_execute,
+        "duplicateReplayed": duplicate,
+        "idempotencyKey": request.idempotency_key,
+        "attempt": request.attempt.max(1),
+        "argumentChecksum": argument_checksum,
+        "observedPaths": observed_paths,
+        "observedHosts": observed_hosts,
+        "createdAt": created_at,
+        "evidencePath": evidence_path.display().to_string(),
+    });
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&evidence_path)
+        .map_err(|err| err.to_string())?;
+    let serialized_evidence = serde_json::to_string(&evidence).map_err(|err| err.to_string())?;
+    writeln!(file, "{serialized_evidence}").map_err(|err| err.to_string())?;
+    Ok(evidence)
+}
+
+#[tauri::command]
+fn record_mcp_approval(request: McpApprovalRecordRequest) -> Result<serde_json::Value, String> {
+    if !["approved", "rejected", "changes_requested"].contains(&request.status.as_str()) {
+        return Err("Unsupported MCP approval status.".to_string());
+    }
+    if request.run_id.trim().is_empty()
+        || request.connection_id.trim().is_empty()
+        || request.tool_name.trim().is_empty()
+    {
+        return Err("MCP approval requires run, connection, and tool identifiers.".to_string());
+    }
+    let project = PathBuf::from(&request.project_path);
+    if !project.is_dir() {
+        return Err("MCP approval project path does not exist.".to_string());
+    }
+    let dir = project.join(".dbc").join("approvals").join("mcp");
+    fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+    let path = dir.join(format!("{}.json", sanitize_file_stem(&request.run_id)));
+    let mut records = fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<Vec<serde_json::Value>>(&content).ok())
+        .unwrap_or_default();
+    records.retain(|record| {
+        record.get("id").and_then(|value| value.as_str()) != Some(request.id.as_str())
+    });
+    let decided_at = unix_millis().to_string();
+    let record = serde_json::json!({
+        "id": request.id,
+        "runId": request.run_id,
+        "connectionId": request.connection_id,
+        "toolName": request.tool_name,
+        "scope": "run",
+        "status": request.status,
+        "decidedAt": decided_at,
+        "path": path.display().to_string(),
+    });
+    records.push(record.clone());
+    let serialized = serde_json::to_string_pretty(&records).map_err(|err| err.to_string())?;
+    let findings = scan_text_for_secret_findings("mcp.approval", &serialized);
+    if !findings.is_empty() {
+        return Err("Secret-like content was rejected from the MCP approval ledger.".to_string());
+    }
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, serialized).map_err(|err| err.to_string())?;
+    fs::rename(&temporary, &path).map_err(|err| err.to_string())?;
+    Ok(record)
+}
+
+#[tauri::command]
+fn test_secret_ref(request: SecretRefCheckRequest) -> SecretRefCheckResult {
+    let Some(reference) = request.secret_ref.strip_prefix("keychain:") else {
+        return SecretRefCheckResult {
+            status: "failed".to_string(),
+            detail: "Only keychain:service/account references are supported for API credentials."
+                .to_string(),
+            provider: "unsupported".to_string(),
+        };
+    };
+    let Some((service, account)) = reference.split_once('/') else {
+        return SecretRefCheckResult {
+            status: "failed".to_string(),
+            detail: "Keychain reference must contain service/account.".to_string(),
+            provider: "macos-keychain".to_string(),
+        };
+    };
+    if service.trim().is_empty() || account.trim().is_empty() {
+        return SecretRefCheckResult {
+            status: "failed".to_string(),
+            detail: "Keychain service and account must be non-empty.".to_string(),
+            provider: "macos-keychain".to_string(),
+        };
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("/usr/bin/security")
+            .args(["find-generic-password", "-s", service, "-a", account])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        return match status {
+            Ok(status) if status.success() => SecretRefCheckResult {
+                status: "ok".to_string(),
+                detail: "Credential metadata exists in macOS Keychain; secret contents were not read."
+                    .to_string(),
+                provider: "macos-keychain".to_string(),
+            },
+            Ok(_) => SecretRefCheckResult {
+                status: "missing".to_string(),
+                detail: "No matching macOS Keychain credential was found; secret contents were not read."
+                    .to_string(),
+                provider: "macos-keychain".to_string(),
+            },
+            Err(_) => SecretRefCheckResult {
+                status: "failed".to_string(),
+                detail: "macOS security command is unavailable.".to_string(),
+                provider: "macos-keychain".to_string(),
+            },
+        };
+    }
+    #[cfg(not(target_os = "macos"))]
+    SecretRefCheckResult {
+        status: "unsupported".to_string(),
+        detail: "This build currently supports macOS Keychain references only.".to_string(),
+        provider: "unsupported".to_string(),
+    }
+}
+
+fn mcp_json_string_array(value: &serde_json::Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(|item| item.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(ToString::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn json_string_field(value: &serde_json::Value, key: &str, fallback: &str) -> String {
+    value
+        .get(key)
+        .and_then(|item| item.as_str())
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+fn inspect_mcp_arguments(value: &serde_json::Value) -> (Vec<String>, Vec<String>, Vec<String>) {
+    fn visit(
+        value: &serde_json::Value,
+        key: &str,
+        paths: &mut BTreeSet<String>,
+        hosts: &mut BTreeSet<String>,
+        sensitive: &mut BTreeSet<String>,
+    ) {
+        let key_lower = key.to_lowercase();
+        if [
+            "token",
+            "secret",
+            "password",
+            "credential",
+            "private_key",
+            "authorization",
+        ]
+        .iter()
+        .any(|needle| key_lower.contains(needle))
+        {
+            sensitive.insert(key.to_string());
+        }
+        match value {
+            serde_json::Value::String(item) => {
+                if item.starts_with("http://") || item.starts_with("https://") {
+                    if let Some(host) = item
+                        .split("//")
+                        .nth(1)
+                        .and_then(|rest| rest.split('/').next())
+                    {
+                        hosts.insert(host.to_lowercase());
+                    }
+                } else if item.starts_with('/')
+                    || item.starts_with("./")
+                    || item.starts_with("../")
+                    || key_lower.contains("path")
+                    || key_lower.contains("file")
+                    || key_lower.contains("directory")
+                    || key_lower == "root"
+                    || key_lower == "cwd"
+                {
+                    paths.insert(item.replace('\\', "/"));
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    visit(item, key, paths, hosts, sensitive);
+                }
+            }
+            serde_json::Value::Object(items) => {
+                for (child_key, item) in items {
+                    visit(item, child_key, paths, hosts, sensitive);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut paths = BTreeSet::new();
+    let mut hosts = BTreeSet::new();
+    let mut sensitive = BTreeSet::new();
+    visit(value, "", &mut paths, &mut hosts, &mut sensitive);
+    (
+        paths.into_iter().collect(),
+        hosts.into_iter().collect(),
+        sensitive.into_iter().collect(),
+    )
+}
+
+fn mcp_path_matches_any(path: &str, patterns: &[String], project_path: &str) -> bool {
+    let normalize = |value: &str| {
+        let substituted = value
+            .replace("{{projectPath}}", project_path)
+            .replace('\\', "/");
+        if substituted.starts_with('/') {
+            substituted.trim_end_matches('/').to_string()
+        } else {
+            format!(
+                "{}/{}",
+                project_path.trim_end_matches('/'),
+                substituted.trim_start_matches("./").trim_end_matches('/')
+            )
+        }
+    };
+    let normalized_path = normalize(path);
+    patterns.iter().any(|pattern| {
+        let normalized_pattern = normalize(pattern);
+        if normalized_pattern.contains('*') {
+            wildcard_match(&normalized_pattern, &normalized_path)
+        } else {
+            normalized_path == normalized_pattern
+                || normalized_path.starts_with(&format!("{normalized_pattern}/"))
+        }
+    })
+}
+
+fn wildcard_match(pattern: &str, value: &str) -> bool {
+    let pattern = pattern.as_bytes();
+    let value = value.as_bytes();
+    let mut row = vec![false; value.len() + 1];
+    row[0] = true;
+    for token in pattern {
+        let mut next = vec![false; value.len() + 1];
+        if *token == b'*' {
+            next[0] = row[0];
+            for index in 1..=value.len() {
+                next[index] = row[index] || next[index - 1];
+            }
+        } else {
+            for index in 1..=value.len() {
+                next[index] = row[index - 1] && (*token == b'?' || *token == value[index - 1]);
+            }
+        }
+        row = next;
+    }
+    row[value.len()]
 }
 
 #[tauri::command]
@@ -659,6 +1969,20 @@ fn check_cli_contract(request: CliContractCheckRequest) -> CliContractCheckResul
             &prompt_mode,
             &mut diagnostics,
         );
+    } else if is_kimi_command(command) {
+        validate_kimi_contract(
+            &resolved_command,
+            &normalized_args_template,
+            &prompt_mode,
+            &mut diagnostics,
+        );
+    } else if is_qwen_command(command) {
+        validate_qwen_contract(
+            &resolved_command,
+            &normalized_args_template,
+            &prompt_mode,
+            &mut diagnostics,
+        );
     } else {
         diagnostics.push(ProjectConfigDiagnostic {
             level: "warning".to_string(),
@@ -688,6 +2012,7 @@ fn check_cli_contract(request: CliContractCheckRequest) -> CliContractCheckResul
 #[tauri::command]
 fn run_cli_provider(request: CliRunRequest) -> CliRunResult {
     let started = Instant::now();
+    let stream_provider_kind = provider_kind_from_command(&request.command).to_string();
     let command_preview = format!("{} {}", request.command, request.args.join(" "));
     let decision = classify_command(command_preview);
 
@@ -708,6 +2033,22 @@ fn run_cli_provider(request: CliRunRequest) -> CliRunResult {
             started,
             "approval_required",
             "Command requires human approval.",
+        );
+    }
+
+    if is_kimi_command(&request.command) {
+        return blocked_result(
+            started,
+            "deny",
+            "Kimi real execution is blocked until the DBC MCP/tool policy proxy can mediate auto-approved tool calls.",
+        );
+    }
+
+    if is_qwen_command(&request.command) && !qwen_read_only_args_ready(&request.args) {
+        return blocked_result(
+            started,
+            "deny",
+            "Qwen real execution requires approval-mode plan, safe-mode, and max-tool-calls 0.",
         );
     }
 
@@ -743,6 +2084,10 @@ fn run_cli_provider(request: CliRunRequest) -> CliRunResult {
                 duration_ms: started.elapsed().as_millis(),
                 decision: "allow".to_string(),
                 redacted_output: "Command was not found.".to_string(),
+                stream_report: empty_provider_stream_report(
+                    &stream_provider_kind,
+                    "Command was not found.",
+                ),
             }
         }
     };
@@ -760,6 +2105,10 @@ fn run_cli_provider(request: CliRunRequest) -> CliRunResult {
             duration_ms: started.elapsed().as_millis(),
             decision: "approval_required".to_string(),
             redacted_output: message,
+            stream_report: empty_provider_stream_report(
+                &stream_provider_kind,
+                "Interactive terminal handoff required.",
+            ),
         };
     }
 
@@ -785,6 +2134,10 @@ fn run_cli_provider(request: CliRunRequest) -> CliRunResult {
                 duration_ms: started.elapsed().as_millis(),
                 decision: "allow".to_string(),
                 redacted_output: redact_text(&err.to_string()),
+                stream_report: empty_provider_stream_report(
+                    &stream_provider_kind,
+                    &err.to_string(),
+                ),
             }
         }
     };
@@ -810,6 +2163,10 @@ fn run_cli_provider(request: CliRunRequest) -> CliRunResult {
                         duration_ms: started.elapsed().as_millis(),
                         decision: "allow".to_string(),
                         redacted_output: "Process timed out and was killed.".to_string(),
+                        stream_report: empty_provider_stream_report(
+                            &stream_provider_kind,
+                            "Process timed out and was killed.",
+                        ),
                     };
                 }
                 std::thread::sleep(Duration::from_millis(100));
@@ -823,6 +2180,10 @@ fn run_cli_provider(request: CliRunRequest) -> CliRunResult {
                     duration_ms: started.elapsed().as_millis(),
                     decision: "allow".to_string(),
                     redacted_output: redact_text(&err.to_string()),
+                    stream_report: empty_provider_stream_report(
+                        &stream_provider_kind,
+                        &err.to_string(),
+                    ),
                 };
             }
         }
@@ -839,6 +2200,12 @@ fn run_cli_provider(request: CliRunRequest) -> CliRunResult {
                 request.max_output_bytes,
             );
             let combined = format!("{stdout}\n{stderr}");
+            let stream_report = normalize_provider_stream(
+                &stream_provider_kind,
+                &stdout,
+                &stderr,
+                output.status.code(),
+            );
             CliRunResult {
                 status: if output.status.success() {
                     "success".to_string()
@@ -851,6 +2218,7 @@ fn run_cli_provider(request: CliRunRequest) -> CliRunResult {
                 duration_ms: started.elapsed().as_millis(),
                 decision: "allow".to_string(),
                 redacted_output: redact_text(&combined),
+                stream_report,
             }
         }
         Err(err) => CliRunResult {
@@ -861,6 +2229,7 @@ fn run_cli_provider(request: CliRunRequest) -> CliRunResult {
             duration_ms: started.elapsed().as_millis(),
             decision: "allow".to_string(),
             redacted_output: redact_text(&err.to_string()),
+            stream_report: empty_provider_stream_report(&stream_provider_kind, &err.to_string()),
         },
     }
 }
@@ -1086,6 +2455,26 @@ fn start_loop_run(
 
     let run = read_loop_run(&conn, &loop_id)?;
     let snapshot = build_loop_snapshot(&conn, run)?;
+    if !request.routing_simulation.is_null() {
+        let routing_evidence_dir = PathBuf::from(&snapshot.project_path)
+            .join(".dbc")
+            .join("evidence")
+            .join(&snapshot.id);
+        fs::create_dir_all(&routing_evidence_dir).map_err(|err| err.to_string())?;
+        let routing_evidence_path = routing_evidence_dir.join("routing-fallback.json");
+        let routing_evidence = serde_json::json!({
+            "schemaVersion": 1,
+            "runId": snapshot.id,
+            "taskId": snapshot.task_id,
+            "recordedAt": unix_millis().to_string(),
+            "simulation": request.routing_simulation,
+        });
+        fs::write(
+            routing_evidence_path,
+            serde_json::to_string_pretty(&routing_evidence).map_err(|err| err.to_string())?,
+        )
+        .map_err(|err| err.to_string())?;
+    }
     persist_loop_outputs(&snapshot)?;
     Ok(snapshot)
 }
@@ -1118,6 +2507,7 @@ fn run_controlled_smoke_loop(
         priority: "normal".to_string(),
         loop_profile: "controlled_smoke".to_string(),
         provider_strategy: "mock_only".to_string(),
+        routing_policy_id: "route-mock-only".to_string(),
         affected_paths: vec![
             ".dbc/tasks".to_string(),
             ".dbc/loops".to_string(),
@@ -1176,6 +2566,7 @@ fn run_controlled_smoke_loop(
             task_spec_checksum: task_record.checksum,
             memory_context: "- [decision] Controlled smoke loops verify DBC orchestration without external model calls.".to_string(),
             memory_refs: Vec::new(),
+            routing_simulation: serde_json::Value::Null,
             steps: controlled_smoke_steps(),
         },
     )?;
@@ -1550,6 +2941,7 @@ fn save_task_spec(request: TaskSpecRequest) -> Result<TaskSpecRecord, String> {
         "priority": request.priority,
         "loopProfile": request.loop_profile,
         "providerStrategy": request.provider_strategy,
+        "routingPolicyId": request.routing_policy_id,
         "affectedPaths": request.affected_paths,
         "allowedPaths": allowed_paths,
         "deniedPaths": request.denied_paths,
@@ -1725,6 +3117,9 @@ fn save_project_config(request: ProjectConfigRequest) -> Result<ProjectConfigRes
     let updated_at = unix_millis().to_string();
     let providers_path = dir.join("providers.yaml");
     let policy_path = dir.join("policy.yaml");
+    let mcp_connections_path = dir.join("mcp-connections.yaml");
+    let tool_policies_path = dir.join("tool-policies.yaml");
+    let model_catalog_path = dir.join("model-catalog.yaml");
 
     let providers_doc = serde_json::json!({
         "version": 1,
@@ -1738,11 +3133,35 @@ fn save_project_config(request: ProjectConfigRequest) -> Result<ProjectConfigRes
         "updatedAt": updated_at,
         "policy": request.command_policy,
     });
+    let mcp_connections_doc = serde_json::json!({
+        "version": 1,
+        "kind": "mcp-connections",
+        "updatedAt": updated_at,
+        "connections": request.mcp_servers,
+    });
+    let tool_policies_doc = serde_json::json!({
+        "version": 1,
+        "kind": "mcp-tool-policies",
+        "updatedAt": updated_at,
+        "policies": request.tool_policies,
+    });
+    let model_catalog_doc = serde_json::json!({
+        "version": 1,
+        "kind": "model-catalog",
+        "updatedAt": updated_at,
+        "models": request.model_catalog,
+    });
 
     let providers_content = json_to_yaml(&providers_doc);
     let policy_content = json_to_yaml(&policy_doc);
+    let mcp_connections_content = json_to_yaml(&mcp_connections_doc);
+    let tool_policies_content = json_to_yaml(&tool_policies_doc);
+    let model_catalog_content = json_to_yaml(&model_catalog_doc);
     fs::write(&providers_path, &providers_content).map_err(|err| err.to_string())?;
     fs::write(&policy_path, &policy_content).map_err(|err| err.to_string())?;
+    fs::write(&mcp_connections_path, &mcp_connections_content).map_err(|err| err.to_string())?;
+    fs::write(&tool_policies_path, &tool_policies_content).map_err(|err| err.to_string())?;
+    fs::write(&model_catalog_path, &model_catalog_content).map_err(|err| err.to_string())?;
 
     Ok(ProjectConfigResult {
         providers: ProjectConfigRecord {
@@ -1753,6 +3172,21 @@ fn save_project_config(request: ProjectConfigRequest) -> Result<ProjectConfigRes
         policy: ProjectConfigRecord {
             path: policy_path.display().to_string(),
             checksum: stable_checksum(&policy_content),
+            updated_at: updated_at.clone(),
+        },
+        mcp_connections: ProjectConfigRecord {
+            path: mcp_connections_path.display().to_string(),
+            checksum: stable_checksum(&mcp_connections_content),
+            updated_at: updated_at.clone(),
+        },
+        tool_policies: ProjectConfigRecord {
+            path: tool_policies_path.display().to_string(),
+            checksum: stable_checksum(&tool_policies_content),
+            updated_at: updated_at.clone(),
+        },
+        model_catalog: ProjectConfigRecord {
+            path: model_catalog_path.display().to_string(),
+            checksum: stable_checksum(&model_catalog_content),
             updated_at,
         },
     })
@@ -1765,11 +3199,20 @@ fn load_project_config(
     let dir = PathBuf::from(&request.project_path).join(".dbc");
     let providers_path = dir.join("providers.yaml");
     let policy_path = dir.join("policy.yaml");
+    let mcp_connections_path = dir.join("mcp-connections.yaml");
+    let tool_policies_path = dir.join("tool-policies.yaml");
+    let model_catalog_path = dir.join("model-catalog.yaml");
     let mut diagnostics = Vec::new();
 
     let (providers_doc, providers_record) =
         read_yaml_contract(&providers_path, "providers", &mut diagnostics)?;
     let (policy_doc, policy_record) = read_yaml_contract(&policy_path, "policy", &mut diagnostics)?;
+    let (mcp_connections_doc, mcp_connections_record) =
+        read_yaml_contract(&mcp_connections_path, "mcp-connections", &mut diagnostics)?;
+    let (tool_policies_doc, tool_policies_record) =
+        read_yaml_contract(&tool_policies_path, "tool-policies", &mut diagnostics)?;
+    let (model_catalog_doc, model_catalog_record) =
+        read_yaml_contract(&model_catalog_path, "model-catalog", &mut diagnostics)?;
 
     let providers = providers_doc
         .as_ref()
@@ -1787,15 +3230,39 @@ fn load_project_config(
                 "deny": [],
             })
         });
+    let mcp_servers = mcp_connections_doc
+        .as_ref()
+        .and_then(|value| value.get("connections"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Array(Vec::new()));
+    let tool_policies = tool_policies_doc
+        .as_ref()
+        .and_then(|value| value.get("policies"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Array(Vec::new()));
+    let model_catalog = model_catalog_doc
+        .as_ref()
+        .and_then(|value| value.get("models"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Array(Vec::new()));
 
     validate_providers_contract(&providers, &mut diagnostics);
     validate_policy_contract(&command_policy, &mut diagnostics);
+    validate_mcp_connections_contract(&mcp_servers, &mut diagnostics);
+    validate_tool_policies_contract(&tool_policies, &mut diagnostics);
+    validate_model_catalog_contract(&model_catalog, &mut diagnostics);
 
     Ok(ProjectConfigLoadResult {
         providers,
         command_policy,
+        mcp_servers,
+        tool_policies,
+        model_catalog,
         providers_record,
         policy_record,
+        mcp_connections_record,
+        tool_policies_record,
+        model_catalog_record,
         diagnostics,
     })
 }
@@ -1999,6 +3466,9 @@ fn recover_project_state(
     Ok(ProjectRecoveryResult {
         providers: config.providers,
         command_policy: config.command_policy,
+        mcp_servers: config.mcp_servers,
+        tool_policies: config.tool_policies,
+        model_catalog: config.model_catalog,
         tasks,
         memory,
         loops,
@@ -3752,6 +5222,297 @@ fn is_executable_file(path: &Path) -> bool {
     path.is_file()
 }
 
+fn normalize_provider_stream(
+    provider_kind: &str,
+    stdout: &str,
+    stderr: &str,
+    exit_code: Option<i32>,
+) -> serde_json::Value {
+    if provider_kind != "kimi" && provider_kind != "qwen" {
+        return serde_json::json!({
+            "schemaVersion": 1,
+            "providerKind": "generic",
+            "format": "text",
+            "eventCount": if stdout.trim().is_empty() { 0 } else { 1 },
+            "malformedLineCount": 0,
+            "sessionId": "",
+            "modelId": "",
+            "finalText": stdout.trim(),
+            "toolCalls": [],
+            "usage": {},
+            "errors": if exit_code.unwrap_or(0) != 0 && !stderr.trim().is_empty() { vec![stderr.trim()] } else { Vec::<&str>::new() },
+            "outcome": if exit_code.unwrap_or(0) != 0 { "failed" } else if stdout.trim().is_empty() { "unknown" } else { "success" },
+        });
+    }
+
+    let mut events = Vec::new();
+    let mut malformed_line_count = 0usize;
+    for line in stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        match serde_json::from_str::<serde_json::Value>(line) {
+            Ok(value) if value.is_object() => events.push(value),
+            _ => malformed_line_count += 1,
+        }
+    }
+
+    let mut session_id = String::new();
+    let mut model_id = String::new();
+    let mut final_text = String::new();
+    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let mut usage = serde_json::json!({});
+
+    for event in &events {
+        if session_id.is_empty() {
+            session_id = json_string(event.get("session_id"))
+                .or_else(|| json_string(event.get("sessionId")))
+                .unwrap_or_default();
+        }
+        if model_id.is_empty() {
+            model_id = json_string(event.get("model"))
+                .or_else(|| json_string(event.pointer("/message/model")))
+                .unwrap_or_default();
+        }
+        if let Some(event_usage) = event
+            .get("usage")
+            .or_else(|| event.pointer("/stats/usage"))
+            .or_else(|| event.pointer("/stats/models"))
+            .filter(|value| value.is_object())
+        {
+            usage = event_usage.clone();
+        }
+
+        if provider_kind == "kimi" {
+            let role = json_string(event.get("role")).unwrap_or_default();
+            let content = stream_text(event.get("content"));
+            if role == "assistant" && !content.is_empty() {
+                final_text = content.clone();
+            }
+            if let Some(calls) = event.get("tool_calls").and_then(|value| value.as_array()) {
+                for call in calls {
+                    tool_calls.push(serde_json::json!({
+                        "id": json_string(call.get("id")).unwrap_or_default(),
+                        "name": json_string(call.pointer("/function/name")).or_else(|| json_string(call.get("name"))).unwrap_or_else(|| "unknown".to_string()),
+                        "status": "requested",
+                        "error": "",
+                    }));
+                }
+            }
+            if role == "tool" {
+                let id = json_string(event.get("tool_call_id")).unwrap_or_default();
+                let denied = content.to_lowercase().contains("denied")
+                    || content.to_lowercase().contains("not allowed")
+                    || content.to_lowercase().contains("forbidden");
+                merge_stream_tool_result(
+                    &mut tool_calls,
+                    &id,
+                    if denied { "denied" } else { "completed" },
+                    if denied { &content } else { "" },
+                );
+            }
+            if role == "error" || json_string(event.get("type")).as_deref() == Some("error") {
+                errors.push(if content.is_empty() {
+                    stream_text(event.get("error"))
+                } else {
+                    content
+                });
+            }
+        } else {
+            let event_type = json_string(event.get("type")).unwrap_or_default();
+            let content = event
+                .pointer("/message/content")
+                .and_then(|value| value.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if event_type == "assistant" {
+                let text = content
+                    .iter()
+                    .map(|item| stream_text(Some(item)))
+                    .filter(|item| !item.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !text.is_empty() {
+                    final_text = text;
+                }
+                for item in &content {
+                    if json_string(item.get("type")).as_deref() != Some("tool_use") {
+                        continue;
+                    }
+                    tool_calls.push(serde_json::json!({
+                        "id": json_string(item.get("id")).unwrap_or_default(),
+                        "name": json_string(item.get("name")).unwrap_or_else(|| "unknown".to_string()),
+                        "status": "requested",
+                        "error": "",
+                    }));
+                }
+            }
+            if event_type == "user" {
+                for item in &content {
+                    if json_string(item.get("type")).as_deref() != Some("tool_result") {
+                        continue;
+                    }
+                    let failed = item
+                        .get("is_error")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false);
+                    let error = if failed {
+                        stream_text(item.get("content"))
+                    } else {
+                        String::new()
+                    };
+                    merge_stream_tool_result(
+                        &mut tool_calls,
+                        &json_string(item.get("tool_use_id")).unwrap_or_default(),
+                        if failed { "failed" } else { "completed" },
+                        &error,
+                    );
+                }
+            }
+            if event_type == "result" {
+                let result_text = stream_text(event.get("result"));
+                if !result_text.is_empty() {
+                    final_text = result_text;
+                }
+                if json_string(event.get("subtype")).as_deref() != Some("success") {
+                    errors.push(
+                        stream_text(event.get("error"))
+                            .trim()
+                            .to_string()
+                            .or_else_if_empty(
+                                json_string(event.get("subtype")).unwrap_or_default(),
+                            ),
+                    );
+                }
+            }
+            if event_type == "error" {
+                errors.push(
+                    stream_text(event.get("error"))
+                        .or_else_if_empty(stream_text(event.get("message"))),
+                );
+            }
+        }
+    }
+
+    if exit_code.unwrap_or(0) != 0 && !stderr.trim().is_empty() {
+        errors.push(stderr.trim().to_string());
+    }
+    errors.retain(|item| !item.trim().is_empty());
+    errors.sort();
+    errors.dedup();
+    let outcome = if exit_code.unwrap_or(0) != 0 {
+        "failed"
+    } else if !errors.is_empty() || malformed_line_count > 0 {
+        "partial"
+    } else if !events.is_empty() {
+        "success"
+    } else {
+        "unknown"
+    };
+    serde_json::json!({
+        "schemaVersion": 1,
+        "providerKind": provider_kind,
+        "format": "stream-json",
+        "eventCount": events.len(),
+        "malformedLineCount": malformed_line_count,
+        "sessionId": session_id,
+        "modelId": model_id,
+        "finalText": final_text,
+        "toolCalls": tool_calls,
+        "usage": usage,
+        "errors": errors,
+        "outcome": outcome,
+    })
+}
+
+trait OrElseIfEmpty {
+    fn or_else_if_empty(self, fallback: String) -> String;
+}
+
+impl OrElseIfEmpty for String {
+    fn or_else_if_empty(self, fallback: String) -> String {
+        if self.trim().is_empty() {
+            fallback
+        } else {
+            self
+        }
+    }
+}
+
+fn empty_provider_stream_report(provider_kind: &str, error: &str) -> serde_json::Value {
+    let normalized_kind = if provider_kind == "kimi" || provider_kind == "qwen" {
+        provider_kind
+    } else {
+        "generic"
+    };
+    serde_json::json!({
+        "schemaVersion": 1,
+        "providerKind": normalized_kind,
+        "format": if normalized_kind == "generic" { "text" } else { "stream-json" },
+        "eventCount": 0,
+        "malformedLineCount": 0,
+        "sessionId": "",
+        "modelId": "",
+        "finalText": "",
+        "toolCalls": [],
+        "usage": {},
+        "errors": if error.trim().is_empty() { Vec::<&str>::new() } else { vec![error] },
+        "outcome": "failed",
+    })
+}
+
+fn json_string(value: Option<&serde_json::Value>) -> Option<String> {
+    value.and_then(|item| item.as_str()).map(str::to_string)
+}
+
+fn stream_text(value: Option<&serde_json::Value>) -> String {
+    let Some(value) = value else {
+        return String::new();
+    };
+    if let Some(text) = value.as_str() {
+        return text.to_string();
+    }
+    if let Some(items) = value.as_array() {
+        return items
+            .iter()
+            .map(|item| stream_text(Some(item)))
+            .filter(|item| !item.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    for key in ["text", "content", "message", "error"] {
+        let text = stream_text(value.get(key));
+        if !text.is_empty() {
+            return text;
+        }
+    }
+    String::new()
+}
+
+fn merge_stream_tool_result(
+    tool_calls: &mut Vec<serde_json::Value>,
+    id: &str,
+    status: &str,
+    error: &str,
+) {
+    if let Some(existing) = tool_calls
+        .iter_mut()
+        .find(|call| json_string(call.get("id")).as_deref() == Some(id))
+    {
+        existing["status"] = serde_json::Value::String(status.to_string());
+        existing["error"] = serde_json::Value::String(error.to_string());
+    } else {
+        tool_calls.push(serde_json::json!({
+            "id": id,
+            "name": "unknown",
+            "status": status,
+            "error": error,
+        }));
+    }
+}
+
 fn executable_names(command: &str) -> Vec<String> {
     let mut names = vec![command.to_string()];
     if cfg!(windows) && !command.contains('.') {
@@ -3776,6 +5537,7 @@ fn blocked_result(started: Instant, decision: &str, message: &str) -> CliRunResu
         duration_ms: started.elapsed().as_millis(),
         decision: decision.to_string(),
         redacted_output: message.to_string(),
+        stream_report: empty_provider_stream_report("generic", message),
     }
 }
 
@@ -5377,7 +7139,38 @@ fn execute_local_commands(run: &LoopRunRow, step: &LoopStepSnapshot) -> StepExec
 
 fn report_from_cli_result(result: &CliRunResult) -> StepStructuredReport {
     if result.status == "success" {
-        return report_from_output(&result.redacted_output);
+        let normalized_output = result
+            .stream_report
+            .get("finalText")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(&result.redacted_output);
+        let mut report = report_from_output(normalized_output);
+        let provider_kind = result
+            .stream_report
+            .get("providerKind")
+            .and_then(|value| value.as_str())
+            .unwrap_or("generic");
+        let event_count = result
+            .stream_report
+            .get("eventCount")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0);
+        let tool_count = result
+            .stream_report
+            .get("toolCalls")
+            .and_then(|value| value.as_array())
+            .map(Vec::len)
+            .unwrap_or(0);
+        report.evidence.push(format!(
+            "Normalized provider stream: kind={provider_kind}, events={event_count}, toolCalls={tool_count}."
+        ));
+        if tool_count > 0 {
+            report.risks.push(format!(
+                "Provider requested {tool_count} tool call(s); verify policy evidence before acceptance."
+            ));
+        }
+        return report;
     }
 
     let status = match result.status.as_str() {
@@ -5746,6 +7539,18 @@ fn normalize_args_template(command: &str, template: &str) -> String {
     if is_claude_command(command) && trimmed.is_empty() {
         return "-p".to_string();
     }
+    if is_kimi_command(command) && (trimmed.is_empty() || trimmed.contains("--final-message-only"))
+    {
+        return "-p \"{{prompt}}\" --output-format stream-json --plan".to_string();
+    }
+    if is_qwen_command(command) {
+        let base = if trimmed.is_empty() {
+            "-p \"{{prompt}}\" --output-format stream-json --approval-mode plan --safe-mode --max-tool-calls 0 --max-session-turns 3 --max-wall-time 120s"
+        } else {
+            trimmed
+        };
+        return normalize_cli_args(command, split_command_line(base)).join(" ");
+    }
     template.to_string()
 }
 
@@ -5753,7 +7558,10 @@ fn normalize_prompt_mode(command: &str, args_template: &str, prompt_mode: &str) 
     if prompt_mode == "terminal" {
         return "terminal".to_string();
     }
-    if (is_codex_command(command) || is_claude_command(command))
+    if (is_codex_command(command)
+        || is_claude_command(command)
+        || is_kimi_command(command)
+        || is_qwen_command(command))
         && !args_template.contains("{{prompt}}")
     {
         return "stdin".to_string();
@@ -5764,7 +7572,8 @@ fn normalize_prompt_mode(command: &str, args_template: &str, prompt_mode: &str) 
 fn normalize_cli_args(command: &str, args: Vec<String>) -> Vec<String> {
     let is_codex = is_codex_command(command);
     let is_claude = is_claude_command(command);
-    if !is_codex && !is_claude {
+    let is_qwen = is_qwen_command(command);
+    if !is_codex && !is_claude && !is_qwen {
         return args;
     }
 
@@ -5775,12 +7584,65 @@ fn normalize_cli_args(command: &str, args: Vec<String>) -> Vec<String> {
             index += if index + 1 < args.len() { 2 } else { 1 };
             continue;
         }
+        if is_qwen && (args[index] == "--yolo" || args[index] == "-y") {
+            index += 1;
+            continue;
+        }
+        if is_qwen && args[index] == "--approval-mode" {
+            normalized.push("--approval-mode".to_string());
+            normalized.push("plan".to_string());
+            index += 2;
+            continue;
+        }
+        if is_qwen && args[index].starts_with("--approval-mode=") {
+            normalized.push("--approval-mode=plan".to_string());
+            index += 1;
+            continue;
+        }
+        if is_qwen && args[index] == "--max-tool-calls" {
+            normalized.push("--max-tool-calls".to_string());
+            normalized.push("0".to_string());
+            index += if index + 1 < args.len() { 2 } else { 1 };
+            continue;
+        }
+        if is_qwen && args[index].starts_with("--max-tool-calls=") {
+            normalized.push("--max-tool-calls=0".to_string());
+            index += 1;
+            continue;
+        }
         if args[index] == "-" {
             index += 1;
             continue;
         }
         normalized.push(args[index].clone());
         index += 1;
+    }
+    if is_qwen
+        && !normalized
+            .iter()
+            .any(|arg| arg == "--approval-mode" || arg.starts_with("--approval-mode="))
+    {
+        normalized.push("--approval-mode".to_string());
+        normalized.push("plan".to_string());
+    }
+    if is_qwen && !normalized.iter().any(|arg| arg == "--safe-mode") {
+        normalized.push("--safe-mode".to_string());
+    }
+    if is_qwen
+        && !normalized
+            .iter()
+            .any(|arg| arg == "--max-tool-calls" || arg.starts_with("--max-tool-calls="))
+    {
+        normalized.push("--max-tool-calls".to_string());
+        normalized.push("0".to_string());
+    }
+    if is_qwen && !normalized.iter().any(|arg| arg == "--max-session-turns") {
+        normalized.push("--max-session-turns".to_string());
+        normalized.push("3".to_string());
+    }
+    if is_qwen && !normalized.iter().any(|arg| arg == "--max-wall-time") {
+        normalized.push("--max-wall-time".to_string());
+        normalized.push("120s".to_string());
     }
     normalized
 }
@@ -5799,6 +7661,40 @@ fn is_claude_command(command: &str) -> bool {
         .and_then(|value| value.to_str())
         .map(|value| value.eq_ignore_ascii_case("claude"))
         .unwrap_or_else(|| command.trim().eq_ignore_ascii_case("claude"))
+}
+
+fn is_kimi_command(command: &str) -> bool {
+    command_has_stem(command, "kimi")
+}
+
+fn is_qwen_command(command: &str) -> bool {
+    command_has_stem(command, "qwen")
+}
+
+fn qwen_read_only_args_ready(args: &[String]) -> bool {
+    let has_safe_mode = args.iter().any(|arg| arg == "--safe-mode");
+    let has_zero_tool_budget = args
+        .windows(2)
+        .any(|pair| pair[0] == "--max-tool-calls" && pair[1] == "0")
+        || args.iter().any(|arg| arg == "--max-tool-calls=0");
+    let has_plan_approval = args
+        .windows(2)
+        .any(|pair| pair[0] == "--approval-mode" && pair[1] == "plan")
+        || args.iter().any(|arg| arg == "--approval-mode=plan");
+    let has_yolo = args.iter().any(|arg| arg == "--yolo" || arg == "-y")
+        || args
+            .windows(2)
+            .any(|pair| pair[0] == "--approval-mode" && pair[1] == "yolo")
+        || args.iter().any(|arg| arg == "--approval-mode=yolo");
+    has_safe_mode && has_zero_tool_budget && has_plan_approval && !has_yolo
+}
+
+fn command_has_stem(command: &str, expected: &str) -> bool {
+    Path::new(command)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case(expected))
+        .unwrap_or_else(|| command.trim().eq_ignore_ascii_case(expected))
 }
 
 fn is_exact_command_path(command: &str) -> bool {
@@ -5948,6 +7844,170 @@ fn validate_claude_contract(
             level: "error".to_string(),
             subject: "claude-contract".to_string(),
             detail: format!("Failed to run `claude --help`: {err}"),
+        }),
+    }
+}
+
+fn validate_kimi_contract(
+    resolved_command: &Path,
+    args_template: &str,
+    prompt_mode: &str,
+    diagnostics: &mut Vec<ProjectConfigDiagnostic>,
+) {
+    if prompt_mode == "terminal" {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "warning".to_string(),
+            subject: "terminal-contract".to_string(),
+            detail: "Terminal mode requires a human-operated interactive terminal or PTY; DBC will stop before auto-execution.".to_string(),
+        });
+        return;
+    }
+    let args = split_command_line(args_template);
+    if !args.iter().any(|arg| arg == "-p" || arg == "--prompt") {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "kimi-contract".to_string(),
+            detail: "Kimi Code must use `-p` or `--prompt` for non-interactive loop runs."
+                .to_string(),
+        });
+    }
+    if !args
+        .iter()
+        .any(|arg| arg == "--output-format=stream-json" || arg == "stream-json")
+    {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "kimi-contract".to_string(),
+            detail: "Kimi Code must use stream-json output for auditable non-interactive runs."
+                .to_string(),
+        });
+    }
+    if prompt_mode != "stdin" && !args_template.contains("{{prompt}}") {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "kimi-contract".to_string(),
+            detail: "Kimi prompt mode must be stdin unless the args template explicitly contains `{{prompt}}`.".to_string(),
+        });
+    }
+    diagnostics.push(ProjectConfigDiagnostic {
+        level: "warning".to_string(),
+        subject: "kimi-tool-policy".to_string(),
+        detail: "Kimi print mode auto-approves internal tool calls; keep MCP/tool access disabled until the DBC policy proxy is active.".to_string(),
+    });
+    validate_help_contract(
+        resolved_command,
+        "kimi-contract",
+        &["--prompt", "--output-format", "--plan"],
+        diagnostics,
+    );
+}
+
+fn validate_qwen_contract(
+    resolved_command: &Path,
+    args_template: &str,
+    prompt_mode: &str,
+    diagnostics: &mut Vec<ProjectConfigDiagnostic>,
+) {
+    if prompt_mode == "terminal" {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "warning".to_string(),
+            subject: "terminal-contract".to_string(),
+            detail: "Terminal mode requires a human-operated interactive terminal or PTY; DBC will stop before auto-execution.".to_string(),
+        });
+        return;
+    }
+    let args = split_command_line(args_template);
+    if args.iter().any(|arg| arg == "--yolo" || arg == "-y")
+        || args
+            .windows(2)
+            .any(|pair| pair[0] == "--approval-mode" && pair[1] == "yolo")
+    {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "qwen-contract".to_string(),
+            detail: "Qwen auto-approval/yolo mode is forbidden by the DBC adapter contract."
+                .to_string(),
+        });
+    }
+    if !args.iter().any(|arg| arg == "--output-format")
+        || !args.iter().any(|arg| arg == "stream-json")
+    {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "qwen-contract".to_string(),
+            detail: "Qwen Code must use stream-json output for auditable non-interactive runs."
+                .to_string(),
+        });
+    }
+    if !args.iter().any(|arg| arg == "--safe-mode")
+        || !args
+            .windows(2)
+            .any(|pair| pair[0] == "--max-tool-calls" && pair[1] == "0")
+    {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "qwen-read-only".to_string(),
+            detail: "Qwen read-only runs require `--safe-mode --max-tool-calls 0`.".to_string(),
+        });
+    }
+    if prompt_mode != "stdin" && !args_template.contains("{{prompt}}") {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "qwen-contract".to_string(),
+            detail: "Qwen prompt mode must be stdin unless the args template explicitly contains `{{prompt}}`.".to_string(),
+        });
+    }
+    validate_help_contract(
+        resolved_command,
+        "qwen-contract",
+        &[
+            "--prompt",
+            "--output-format",
+            "--approval-mode",
+            "--safe-mode",
+            "--max-tool-calls",
+        ],
+        diagnostics,
+    );
+}
+
+fn validate_help_contract(
+    resolved_command: &Path,
+    subject: &str,
+    required_flags: &[&str],
+    diagnostics: &mut Vec<ProjectConfigDiagnostic>,
+) {
+    match Command::new(resolved_command).arg("--help").output() {
+        Ok(output) => {
+            let help = trim_output(
+                &(String::from_utf8_lossy(&output.stdout).to_string()
+                    + &String::from_utf8_lossy(&output.stderr)),
+                12000,
+            );
+            if output.status.success() && required_flags.iter().all(|flag| help.contains(flag)) {
+                diagnostics.push(ProjectConfigDiagnostic {
+                    level: "ok".to_string(),
+                    subject: subject.to_string(),
+                    detail: format!(
+                        "Installed CLI exposes the required non-interactive flags: {}.",
+                        required_flags.join(", ")
+                    ),
+                });
+            } else {
+                diagnostics.push(ProjectConfigDiagnostic {
+                    level: "error".to_string(),
+                    subject: subject.to_string(),
+                    detail: format!(
+                        "Installed CLI help does not expose the expected flags: {}.",
+                        required_flags.join(", ")
+                    ),
+                });
+            }
+        }
+        Err(err) => diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: subject.to_string(),
+            detail: format!("Failed to inspect CLI help: {err}"),
         }),
     }
 }
@@ -7641,6 +9701,168 @@ fn validate_policy_contract(
     }
 }
 
+fn validate_mcp_connections_contract(
+    value: &serde_json::Value,
+    diagnostics: &mut Vec<ProjectConfigDiagnostic>,
+) {
+    let Some(connections) = value.as_array() else {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "mcp-connections".to_string(),
+            detail: "mcp-connections.yaml must contain a connections array.".to_string(),
+        });
+        return;
+    };
+    for connection in connections {
+        let id = connection
+            .get("id")
+            .and_then(|item| item.as_str())
+            .unwrap_or("mcp-connection");
+        let transport = connection
+            .get("transport")
+            .and_then(|item| item.as_str())
+            .unwrap_or("stdio");
+        let command = connection
+            .get("command")
+            .and_then(|item| item.as_str())
+            .unwrap_or("");
+        let url = connection
+            .get("url")
+            .and_then(|item| item.as_str())
+            .unwrap_or("");
+        let secret_ref = connection
+            .get("secretRef")
+            .and_then(|item| item.as_str())
+            .unwrap_or("");
+        if !["stdio", "streamable_http", "sse_legacy"].contains(&transport) {
+            diagnostics.push(ProjectConfigDiagnostic {
+                level: "error".to_string(),
+                subject: id.to_string(),
+                detail: format!("Unsupported MCP transport `{transport}`."),
+            });
+        }
+        if transport == "stdio" && command.trim().is_empty() {
+            diagnostics.push(ProjectConfigDiagnostic {
+                level: "error".to_string(),
+                subject: id.to_string(),
+                detail: "stdio MCP connection requires a command.".to_string(),
+            });
+        }
+        if transport != "stdio" && !(url.starts_with("http://") || url.starts_with("https://")) {
+            diagnostics.push(ProjectConfigDiagnostic {
+                level: "error".to_string(),
+                subject: id.to_string(),
+                detail: "HTTP/SSE MCP connection requires an http(s) URL.".to_string(),
+            });
+        }
+        if !secret_ref.is_empty()
+            && !secret_ref.starts_with("keychain:")
+            && !secret_ref.starts_with("secret:")
+            && !secret_ref.starts_with("env:")
+        {
+            diagnostics.push(ProjectConfigDiagnostic {
+                level: "error".to_string(),
+                subject: id.to_string(),
+                detail: "MCP auth must store only keychain:, secret:, or env: references."
+                    .to_string(),
+            });
+        }
+        let serialized = connection.to_string();
+        if !scan_text_for_secret_findings("mcp-connection", &serialized).is_empty() {
+            diagnostics.push(ProjectConfigDiagnostic {
+                level: "error".to_string(),
+                subject: id.to_string(),
+                detail: "Secret-like inline data is forbidden in MCP project configuration."
+                    .to_string(),
+            });
+        }
+    }
+}
+
+fn validate_tool_policies_contract(
+    value: &serde_json::Value,
+    diagnostics: &mut Vec<ProjectConfigDiagnostic>,
+) {
+    let Some(policies) = value.as_array() else {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "tool-policies".to_string(),
+            detail: "tool-policies.yaml must contain a policies array.".to_string(),
+        });
+        return;
+    };
+    for policy in policies {
+        let id = policy
+            .get("id")
+            .and_then(|item| item.as_str())
+            .unwrap_or("tool-policy");
+        for key in ["allowedTools", "deniedTools", "allowedPaths", "deniedPaths"] {
+            if !policy.get(key).map(|item| item.is_array()).unwrap_or(false) {
+                diagnostics.push(ProjectConfigDiagnostic {
+                    level: "error".to_string(),
+                    subject: id.to_string(),
+                    detail: format!("Tool policy field `{key}` must be an array."),
+                });
+            }
+        }
+        let max_calls = policy
+            .get("maxCallsPerRun")
+            .and_then(|item| item.as_u64())
+            .unwrap_or(0);
+        if max_calls == 0 || max_calls > 1000 {
+            diagnostics.push(ProjectConfigDiagnostic {
+                level: "error".to_string(),
+                subject: id.to_string(),
+                detail: "maxCallsPerRun must be between 1 and 1000.".to_string(),
+            });
+        }
+    }
+}
+
+fn validate_model_catalog_contract(
+    value: &serde_json::Value,
+    diagnostics: &mut Vec<ProjectConfigDiagnostic>,
+) {
+    let Some(models) = value.as_array() else {
+        diagnostics.push(ProjectConfigDiagnostic {
+            level: "error".to_string(),
+            subject: "model-catalog".to_string(),
+            detail: "model-catalog.yaml must contain a models array.".to_string(),
+        });
+        return;
+    };
+    for model in models {
+        let id = model
+            .get("id")
+            .and_then(|item| item.as_str())
+            .unwrap_or("model");
+        let provider_id = model
+            .get("providerId")
+            .and_then(|item| item.as_str())
+            .unwrap_or("");
+        let source_url = model
+            .get("sourceUrl")
+            .and_then(|item| item.as_str())
+            .unwrap_or("");
+        let verified_at = model
+            .get("verifiedAt")
+            .and_then(|item| item.as_str())
+            .unwrap_or("");
+        if id.trim().is_empty()
+            || provider_id.trim().is_empty()
+            || !source_url.starts_with("https://")
+            || verified_at.trim().is_empty()
+        {
+            diagnostics.push(ProjectConfigDiagnostic {
+                level: "error".to_string(),
+                subject: id.to_string(),
+                detail: "Model entries require id, providerId, HTTPS sourceUrl, and verifiedAt."
+                    .to_string(),
+            });
+        }
+    }
+}
+
 fn file_modified_millis(path: &Path) -> String {
     path.metadata()
         .ok()
@@ -7736,6 +9958,10 @@ fn default_loop_profile() -> String {
 
 fn default_provider_strategy() -> String {
     "codex_build_claude_review".to_string()
+}
+
+fn default_routing_policy_id() -> String {
+    "route-codex-build-claude-review".to_string()
 }
 
 fn database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -7956,6 +10182,7 @@ fn start_harness_run(
     request: harness::HarnessRunRequest,
 ) -> Result<harness::HarnessRun, String> {
     let conn = open_db(database_path(&app)?)?;
+    let routing_simulation = request.routing_simulation.clone();
     let run = harness::create_harness_run(&conn, request)?;
     let contract = harness::read_contract(&conn, &run.contract_id)?;
     let slice = harness::read_slice(&conn, &run.current_slice_id)?;
@@ -7981,6 +10208,7 @@ fn start_harness_run(
                 run.id, run.contract_id, run.current_slice_id
             ),
             memory_refs: vec![contract.artifact_path.clone(), slice.artifact_path.clone()],
+            routing_simulation,
             steps: harness_compatibility_steps(&slice),
         },
     )?;
@@ -8183,6 +10411,139 @@ mod tests {
     }
 
     #[test]
+    fn kimi_empty_args_default_to_stream_json_arg_contract() {
+        let template = normalize_args_template("/opt/homebrew/bin/kimi", "");
+        let args = normalize_cli_args(
+            "/opt/homebrew/bin/kimi",
+            parse_args_template(&template, "hello", "/tmp/example"),
+        );
+
+        assert_eq!(
+            template,
+            "-p \"{{prompt}}\" --output-format stream-json --plan"
+        );
+        assert!(args.iter().any(|arg| arg == "-p"));
+        assert!(args.iter().any(|arg| arg == "hello"));
+        assert_eq!(normalize_prompt_mode("kimi", &template, "arg"), "arg");
+    }
+
+    #[test]
+    fn qwen_yolo_args_are_replaced_with_plan_mode() {
+        let template = normalize_args_template(
+            "/opt/homebrew/bin/qwen",
+            "--output-format stream-json --approval-mode yolo --yolo --max-tool-calls 99",
+        );
+        let args = normalize_cli_args(
+            "/opt/homebrew/bin/qwen",
+            parse_args_template(&template, "hello", "/tmp/example"),
+        );
+
+        assert_eq!(
+            template,
+            "--output-format stream-json --approval-mode plan --max-tool-calls 0 --safe-mode --max-session-turns 3 --max-wall-time 120s"
+        );
+        assert!(!args.iter().any(|arg| arg == "--yolo" || arg == "-y"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--approval-mode" && pair[1] == "plan"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--max-tool-calls" && pair[1] == "0"));
+        assert_eq!(normalize_prompt_mode("qwen", &template, "arg"), "stdin");
+    }
+
+    #[test]
+    fn runtime_blocks_kimi_until_tool_policy_proxy_exists() {
+        let result = run_cli_provider(CliRunRequest {
+            command: "/opt/homebrew/bin/kimi".to_string(),
+            args: vec!["-p".to_string(), "review".to_string(), "--plan".to_string()],
+            prompt: String::new(),
+            cwd: String::new(),
+            prompt_mode: "arg".to_string(),
+            timeout_seconds: 1,
+            max_output_bytes: 1000,
+            policy_mode: "allow".to_string(),
+        });
+        assert_eq!(result.status, "blocked_by_policy");
+        assert!(result.stderr.contains("policy proxy"));
+    }
+
+    #[test]
+    fn runtime_blocks_qwen_without_zero_tool_budget() {
+        let result = run_cli_provider(CliRunRequest {
+            command: "/opt/homebrew/bin/qwen".to_string(),
+            args: vec![
+                "-p".to_string(),
+                "review".to_string(),
+                "--approval-mode".to_string(),
+                "plan".to_string(),
+                "--safe-mode".to_string(),
+                "--max-tool-calls".to_string(),
+                "1".to_string(),
+            ],
+            prompt: String::new(),
+            cwd: String::new(),
+            prompt_mode: "arg".to_string(),
+            timeout_seconds: 1,
+            max_output_bytes: 1000,
+            policy_mode: "allow".to_string(),
+        });
+        assert_eq!(result.status, "blocked_by_policy");
+        assert!(result.stderr.contains("max-tool-calls 0"));
+    }
+
+    #[test]
+    fn qwen_equals_safety_args_are_forced_to_plan_and_zero_tools() {
+        let args = normalize_cli_args(
+            "qwen",
+            vec![
+                "--approval-mode=yolo".to_string(),
+                "--max-tool-calls=9".to_string(),
+            ],
+        );
+        assert!(args.iter().any(|arg| arg == "--approval-mode=plan"));
+        assert!(args.iter().any(|arg| arg == "--max-tool-calls=0"));
+        assert!(!args.iter().any(|arg| arg.contains("yolo")));
+    }
+
+    #[test]
+    fn provider_stream_semver_baseline_is_detected() {
+        assert_eq!(detect_semver("@moonshot-ai/kimi-code 0.29.0"), "0.29.0");
+        assert!(semver_at_least("0.29.0", "0.21.0"));
+        assert!(!semver_at_least("0.20.9", "0.21.0"));
+    }
+
+    #[test]
+    fn kimi_stream_fixture_normalizes_final_text_and_tool_evidence() {
+        let report = normalize_provider_stream(
+            "kimi",
+            include_str!("../../tests/fixtures/kimi-stream.v1.jsonl"),
+            "",
+            Some(0),
+        );
+        assert_eq!(report["outcome"], "success");
+        assert_eq!(report["eventCount"], 3);
+        assert_eq!(report["finalText"], "Final Kimi review: no blocking issue.");
+        assert_eq!(report["toolCalls"][0]["status"], "completed");
+    }
+
+    #[test]
+    fn qwen_stream_fixture_normalizes_session_model_and_final_result() {
+        let report = normalize_provider_stream(
+            "qwen",
+            include_str!("../../tests/fixtures/qwen-stream.v1.jsonl"),
+            "",
+            Some(0),
+        );
+        assert_eq!(report["outcome"], "success");
+        assert_eq!(report["eventCount"], 4);
+        assert_eq!(report["sessionId"], "qwen-session-1");
+        assert_eq!(report["modelId"], "qwen3-coder-plus");
+        assert_eq!(report["finalText"], "Final Qwen review: pass.");
+        assert_eq!(report["toolCalls"][0]["status"], "completed");
+    }
+
+    #[test]
     fn terminal_prompt_mode_is_preserved_for_cli_contracts() {
         let codex_template = normalize_args_template("/opt/homebrew/bin/codex", "");
         assert_eq!(
@@ -8237,6 +10598,9 @@ mod tests {
             project_path: dir.display().to_string(),
             providers: providers.clone(),
             command_policy: command_policy.clone(),
+            mcp_servers: serde_json::json!([]),
+            tool_policies: serde_json::json!([]),
+            model_catalog: serde_json::json!([]),
         })
         .unwrap();
         let loaded = load_project_config(ProjectConfigLoadRequest {
@@ -8633,6 +10997,140 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    #[test]
+    fn mcp_proxy_requires_run_approval_and_reserves_idempotency_key() {
+        let dir = temp_project_dir();
+        let policy = serde_json::json!({
+            "id": "approved-write",
+            "enabled": true,
+            "allowedTools": [],
+            "deniedTools": [],
+            "allowedPaths": ["{{projectPath}}"],
+            "deniedPaths": [".env", ".git"],
+            "allowNetwork": false,
+            "allowSensitiveData": false,
+            "writeDecision": "approval_required",
+            "networkDecision": "deny",
+            "destructiveDecision": "deny",
+            "maxCallsPerRun": 10,
+            "maxRetries": 1
+        });
+        let tool = serde_json::json!({
+            "name": "write_file",
+            "description": "Write a workspace file",
+            "inputSchema": {"type": "object"},
+            "intent": "write"
+        });
+        let request = |approval_granted| McpToolCallPolicyRequest {
+            project_path: dir.display().to_string(),
+            run_id: "RUN-MCP".to_string(),
+            connection_id: "filesystem".to_string(),
+            policy: policy.clone(),
+            tool: tool.clone(),
+            arguments: serde_json::json!({"path": "README.md", "content": "safe"}),
+            idempotency_key: "write-readme-1".to_string(),
+            attempt: 1,
+            approval_granted,
+        };
+
+        let pending = evaluate_mcp_tool_call(request(false)).unwrap();
+        assert_eq!(
+            pending.get("decision").and_then(|value| value.as_str()),
+            Some("approval_required")
+        );
+        assert_eq!(
+            pending
+                .get("shouldExecute")
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
+
+        let approved = evaluate_mcp_tool_call(request(true)).unwrap();
+        assert_eq!(
+            approved.get("decision").and_then(|value| value.as_str()),
+            Some("allow")
+        );
+        assert_eq!(
+            approved
+                .get("shouldExecute")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+
+        let replay = evaluate_mcp_tool_call(request(true)).unwrap();
+        assert_eq!(
+            replay
+                .get("duplicateReplayed")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            replay
+                .get("shouldExecute")
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        let evidence_path = replay
+            .get("evidencePath")
+            .and_then(|value| value.as_str())
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(evidence_path).unwrap().lines().count(),
+            3
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn mcp_proxy_blocks_secret_exfiltration_and_path_traversal() {
+        let dir = temp_project_dir();
+        let policy = serde_json::json!({
+            "id": "read-only",
+            "enabled": true,
+            "allowedTools": [],
+            "deniedTools": [],
+            "allowedPaths": ["{{projectPath}}"],
+            "deniedPaths": [".env", ".git", "**/*key*"],
+            "allowNetwork": false,
+            "allowSensitiveData": false,
+            "writeDecision": "deny",
+            "networkDecision": "deny",
+            "destructiveDecision": "deny",
+            "maxCallsPerRun": 20,
+            "maxRetries": 0
+        });
+        let tool = serde_json::json!({
+            "name": "list_documents",
+            "description": "List files",
+            "inputSchema": {"type": "object"},
+            "intent": "read"
+        });
+        let result = evaluate_mcp_tool_call(McpToolCallPolicyRequest {
+            project_path: dir.display().to_string(),
+            run_id: "RUN-MALICIOUS".to_string(),
+            connection_id: "fixture".to_string(),
+            policy: policy.clone(),
+            tool: tool.clone(),
+            arguments: serde_json::json!({"path": "../.env", "authorizationToken": "redacted-fixture"}),
+            idempotency_key: "malicious-1".to_string(),
+            attempt: 1,
+            approval_granted: true,
+        }).unwrap();
+        assert_eq!(
+            result.get("decision").and_then(|value| value.as_str()),
+            Some("deny")
+        );
+        assert_eq!(
+            result
+                .get("shouldExecute")
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        let serialized = serde_json::to_string(&result).unwrap();
+        assert!(!serialized.contains("redacted-fixture"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
     fn temp_project_dir() -> PathBuf {
         let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("dbc-test-{}-{id}", unix_millis()));
@@ -8886,6 +11384,7 @@ mod tests {
             task_spec_checksum: "checksum".to_string(),
             memory_context: String::new(),
             memory_refs: Vec::new(),
+            routing_simulation: serde_json::Value::Null,
             steps,
         }
     }
@@ -8978,6 +11477,10 @@ fn main() {
             discover_cli,
             check_cli_contract,
             test_cli_provider,
+            test_mcp_connection,
+            evaluate_mcp_tool_call,
+            record_mcp_approval,
+            test_secret_ref,
             run_cli_provider,
             run_controlled_smoke_loop,
             start_loop_run,

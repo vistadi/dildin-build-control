@@ -2,8 +2,22 @@ export type RiskLevel = "low" | "medium" | "high" | "critical";
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
 export type TaskLoopProfile = "mock" | "controlled_smoke" | "real_micro";
 export type ProviderStrategy = "codex_build_claude_review" | "codex_only" | "claude_review_only" | "mock_only";
+export type ProviderVendor = "openai" | "anthropic" | "moonshot" | "alibaba" | "local" | "dbc" | "custom";
+export type ProviderAdapterId =
+  | "mock/v1"
+  | "local-runner/v1"
+  | "codex/exec-workspace-write/v1"
+  | "claude/print-stdin/v1"
+  | "kimi/headless-stream-json/v1"
+  | "qwen/headless-stream-json/v1"
+  | "qwen/openai-compatible/v1"
+  | "kimi/openai-compatible/v1"
+  | "generic-cli/v1";
+export type ProviderFeatureFlag = "kimi" | "qwen";
 export type ProviderType = "mock" | "cli" | "api" | "local_runner" | "local_model";
 export type ProviderHealth = "unknown" | "ok" | "warning" | "failed";
+export type ProviderAuthStatus = "present" | "missing" | "unknown" | "not_required";
+export type ProviderCompatibilityStatus = "supported" | "capability_missing" | "unsupported_version" | "unknown";
 export type PromptMode = "stdin" | "arg" | "file" | "terminal";
 export type AgentExecutionMode =
   | "read_only"
@@ -14,6 +28,14 @@ export type AgentExecutionMode =
   | "approval_required";
 export type CommandDecision = "allow" | "approval_required" | "deny";
 export type ProviderRunMode = "mock" | "real";
+export type ProviderCostTier = "free" | "low" | "medium" | "high" | "unknown";
+export type ProviderLatencyTier = "local" | "fast" | "standard" | "slow" | "unknown";
+export type DataResidency = "local" | "eu" | "us" | "cn" | "global" | "unknown";
+export type McpTransport = "stdio" | "streamable_http" | "sse_legacy";
+export type McpAuthMode = "none" | "oauth" | "secret_ref";
+export type McpTrustTemplate = "read_only" | "workspace_write" | "networked" | "custom";
+export type McpToolIntent = "read" | "write" | "network" | "sensitive_read" | "destructive" | "unknown";
+export type McpDecision = "allow" | "approval_required" | "deny";
 export type LoopState =
   | "planned"
   | "coding"
@@ -64,6 +86,7 @@ export interface Task {
   priority: TaskPriority;
   loopProfile: TaskLoopProfile;
   providerStrategy: ProviderStrategy;
+  routingPolicyId: string;
   affectedPaths: string[];
   allowedPaths: string[];
   deniedPaths: string[];
@@ -124,6 +147,7 @@ export interface ApprovalRequest {
     | "git_stage"
     | "git_commit"
     | "scope_expansion"
+    | "mcp_tool_call"
     | "command_request"
     | "command_template";
   loopId?: string;
@@ -139,6 +163,10 @@ export interface ApprovalRequest {
   createdAt?: string;
   decidedAt?: string;
   optional?: boolean;
+  runId?: string;
+  connectionId?: string;
+  toolName?: string;
+  approvalScope?: "once" | "run";
   status: "pending" | "approved" | "rejected" | "changes_requested";
 }
 
@@ -175,6 +203,10 @@ export interface MemoryNote {
 export interface Provider {
   id: string;
   name: string;
+  vendor?: ProviderVendor;
+  adapterId?: ProviderAdapterId;
+  invocationProfileId?: string;
+  featureFlag?: ProviderFeatureFlag;
   type: ProviderType;
   enabled: boolean;
   health: ProviderHealth;
@@ -186,11 +218,115 @@ export interface Provider {
   timeoutSeconds: number;
   maxOutputBytes: number;
   capabilities: string[];
+  modelIds?: string[];
   assignedRoles: string[];
   lastTestAt?: string;
   lastTestResult?: string;
   lastContractCheckAt?: string;
   lastContractCheckResult?: string;
+  detectedVersion?: string;
+  compatibilityStatus?: ProviderCompatibilityStatus;
+  authStatus?: ProviderAuthStatus;
+  readOnlyReady?: boolean;
+  recoveryAction?: string;
+  costTier?: ProviderCostTier;
+  latencyTier?: ProviderLatencyTier;
+  dataResidency?: DataResidency;
+  egressRequired?: boolean;
+  contextWindow?: number;
+  deprecatedAfter?: string;
+  endpointUrl?: string;
+  apiProtocol?: "openai_chat_completions" | "openai_responses";
+  secretRef?: string;
+  catalogSource?: string;
+  region?: string;
+}
+
+export interface RoutingPolicyRoute {
+  roleId: string;
+  primaryProviderId: string;
+  fallbackProviderIds: string[];
+  requiredCapabilities: string[];
+  executionMode: AgentExecutionMode;
+  modelId?: string;
+  toolPolicyId?: string;
+}
+
+export interface RoutingPolicy {
+  id: string;
+  name: string;
+  description: string;
+  legacyProviderStrategy?: ProviderStrategy;
+  roleRoutes: RoutingPolicyRoute[];
+  fallbackRisk: "same_only" | "allow_lower" | "approval_required";
+  enabled: boolean;
+  constraints?: {
+    maxCostTier: ProviderCostTier;
+    maxLatencyTier: ProviderLatencyTier;
+    allowedResidencies: DataResidency[];
+    allowExternalEgress: boolean;
+    requireHealthy: boolean;
+  };
+}
+
+export interface RoutingAttempt {
+  roleId: string;
+  providerId: string;
+  order: number;
+  status: "selected" | "skipped" | "approval_required" | "unavailable";
+  reason: string;
+  missingCapabilities: string[];
+  unsafeFallback: boolean;
+}
+
+export interface RoutingSimulationRole {
+  roleId: string;
+  configuredProviderId: string;
+  selectedProviderId: string;
+  decision: "ready" | "approval_required" | "blocked";
+  attempts: RoutingAttempt[];
+}
+
+export interface RoutingSimulationResult {
+  schemaVersion: 1;
+  policyId: string;
+  status: "ready" | "approval_required" | "blocked";
+  roles: RoutingSimulationRole[];
+  estimatedCostTier: ProviderCostTier;
+  estimatedLatencyTier: ProviderLatencyTier;
+  externalEgress: boolean;
+  generatedAt: string;
+}
+
+export interface FallbackJournalEntry extends RoutingAttempt {
+  id: string;
+  runId: string;
+  policyId: string;
+  createdAt: string;
+}
+
+export interface ExecutionProviderIdentity {
+  roleId: string;
+  configuredProviderId: string;
+  providerId: string;
+  providerName: string;
+  vendor: ProviderVendor;
+  adapterId: ProviderAdapterId;
+  invocationProfileId: string;
+  modelId: string;
+  runMode: ProviderRunMode;
+  capabilities: string[];
+  fallbackProviderIds: string[];
+}
+
+export interface ExecutionIdentitySnapshot {
+  schemaVersion: 1;
+  routingPolicyId: string;
+  legacyProviderStrategy: ProviderStrategy;
+  capturedAt: string;
+  providers: ExecutionProviderIdentity[];
+  mcpServerIds: string[];
+  configChecksum: string;
 }
 
 export interface ProviderPreset {
@@ -200,10 +336,154 @@ export interface ProviderPreset {
   providers: Provider[];
 }
 
+export interface ModelCatalogEntry {
+  id: string;
+  providerId: string;
+  vendor: ProviderVendor;
+  displayName: string;
+  capabilities: string[];
+  contextWindow: number;
+  costTier: ProviderCostTier;
+  latencyTier: ProviderLatencyTier;
+  dataResidency: DataResidency;
+  inputCostPerMillion?: number;
+  outputCostPerMillion?: number;
+  currency?: "USD" | "CNY";
+  status: "recommended" | "supported" | "preview" | "deprecated";
+  releasedAt?: string;
+  deprecatedAfter?: string;
+  sourceUrl: string;
+  verifiedAt: string;
+}
+
+export interface NormalizedProviderUsage {
+  providerId: string;
+  modelId: string;
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  totalTokens: number;
+  amount: number;
+  currency: "USD" | "CNY" | "unknown";
+  confidence: "exact" | "estimated" | "unknown";
+}
+
 export interface CommandPolicy {
   allow: string[];
   approvalRequired: string[];
   deny: string[];
+}
+
+export interface McpToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  intent: McpToolIntent;
+  discoveredAt: string;
+}
+
+export interface McpServerConnection {
+  id: string;
+  name: string;
+  transport: McpTransport;
+  enabled: boolean;
+  health: ProviderHealth;
+  command: string;
+  args: string[];
+  url: string;
+  authMode: McpAuthMode;
+  secretRef: string;
+  headerSecretRefs: Record<string, string>;
+  oauthStatus: "not_required" | "not_connected" | "connected" | "expired" | "unknown";
+  toolPolicyId: string;
+  discoveredTools: McpToolDefinition[];
+  protocolVersion: string;
+  serverVersion: string;
+  timeoutSeconds: number;
+  lastCheckedAt?: string;
+  lastCheckResult?: string;
+  recoveryAction?: string;
+}
+
+export interface ToolPolicy {
+  id: string;
+  name: string;
+  description: string;
+  trustTemplate: McpTrustTemplate;
+  allowedTools: string[];
+  deniedTools: string[];
+  allowedPaths: string[];
+  deniedPaths: string[];
+  allowNetwork: boolean;
+  allowSensitiveData: boolean;
+  writeDecision: "allow" | "approval_required" | "deny";
+  networkDecision: "allow" | "approval_required" | "deny";
+  destructiveDecision: "approval_required" | "deny";
+  maxCallsPerRun: number;
+  maxRetries: number;
+  timeoutSeconds: number;
+  enabled: boolean;
+}
+
+export interface McpConnectionCheckResult {
+  status: ProviderHealth;
+  detail: string;
+  transport: McpTransport;
+  resolvedCommand: string;
+  protocolVersion: string;
+  serverVersion: string;
+  tools: McpToolDefinition[];
+  authStatus: ProviderAuthStatus;
+  recoveryAction: string;
+  diagnostics: Array<{
+    level: "ok" | "info" | "warning" | "error";
+    subject: string;
+    detail: string;
+  }>;
+}
+
+export interface McpToolCallRequest {
+  projectPath: string;
+  runId: string;
+  connectionId: string;
+  policy: ToolPolicy;
+  tool: McpToolDefinition;
+  arguments: Record<string, unknown>;
+  idempotencyKey: string;
+  attempt: number;
+  approvalGranted: boolean;
+}
+
+export interface McpToolCallEvidence {
+  schemaVersion: 1;
+  id: string;
+  runId: string;
+  connectionId: string;
+  policyId: string;
+  toolName: string;
+  intent: McpToolIntent;
+  decision: McpDecision;
+  reason: string;
+  shouldExecute: boolean;
+  duplicateReplayed: boolean;
+  idempotencyKey: string;
+  attempt: number;
+  argumentChecksum: string;
+  observedPaths: string[];
+  observedHosts: string[];
+  createdAt: string;
+  evidencePath: string;
+}
+
+export interface McpApprovalRecord {
+  id: string;
+  runId: string;
+  connectionId: string;
+  toolName: string;
+  scope: "run";
+  status: "approved" | "rejected" | "changes_requested";
+  decidedAt: string;
+  path: string;
 }
 
 export interface ProviderRunResult {
@@ -220,12 +500,43 @@ export interface ProviderRunResult {
   durationMs: number;
   decision: CommandDecision;
   redactedOutput: string;
+  streamReport?: ProviderStreamReport;
 }
 
 export interface ProviderHealthResult {
   status: ProviderHealth;
   detail: string;
   versionOutput: string;
+  providerKind?: string;
+  resolvedCommand?: string;
+  detectedVersion?: string;
+  compatibilityStatus?: ProviderCompatibilityStatus;
+  authStatus?: ProviderAuthStatus;
+  authDetail?: string;
+  readOnlyReady?: boolean;
+  recoveryAction?: string;
+}
+
+export interface ProviderStreamToolCall {
+  id: string;
+  name: string;
+  status: "requested" | "completed" | "failed" | "denied";
+  error: string;
+}
+
+export interface ProviderStreamReport {
+  schemaVersion: 1;
+  providerKind: "kimi" | "qwen" | "generic";
+  format: "stream-json" | "text";
+  eventCount: number;
+  malformedLineCount: number;
+  sessionId: string;
+  modelId: string;
+  finalText: string;
+  toolCalls: ProviderStreamToolCall[];
+  usage: Record<string, unknown>;
+  errors: string[];
+  outcome: "success" | "failed" | "partial" | "unknown";
 }
 
 export interface CliCandidate {
@@ -367,9 +678,11 @@ export interface HarnessRun {
   lastError: string;
   compatibilityLoopRunId: string;
   manifestPath: string;
+  executionIdentity: ExecutionIdentitySnapshot;
 }
 
 export interface EvidencePack {
+  schemaVersion: number;
   id: string;
   projectId: string;
   projectPath: string;
@@ -383,6 +696,11 @@ export interface EvidencePack {
   finalizedAt: string;
   finalDecision: string;
   refs: Record<string, unknown>;
+  executionIdentity: ExecutionIdentitySnapshot;
+  verification: Record<string, unknown>;
+  mcpActivity: Record<string, unknown>;
+  routingActivity: Record<string, unknown>;
+  usage: Record<string, unknown>;
 }
 
 export interface HarnessOverview {
@@ -729,11 +1047,16 @@ export interface ApprovalQueueReport {
 }
 
 export interface AppState {
+  telemetryEnabled: boolean;
   projects: Project[];
   activeProjectId: string;
   providers: Provider[];
   agents: AgentRole[];
+  routingPolicies: RoutingPolicy[];
+  modelCatalog: ModelCatalogEntry[];
   commandPolicy: CommandPolicy;
+  mcpServers: McpServerConnection[];
+  toolPolicies: ToolPolicy[];
   tasks: Task[];
   loopSteps: LoopStep[];
   approvals: ApprovalRequest[];

@@ -12,10 +12,15 @@ flowchart LR
   Runtime --> SQLite["SQLite app database"]
   Runtime --> DBC[".dbc workspace files"]
   Runtime --> Providers["CLI providers"]
+  Runtime --> API["OpenAI-compatible API adapters"]
+  Runtime --> MCP["DBC MCP policy proxy"]
+  MCP --> Servers["stdio / Streamable HTTP MCP servers"]
   Runtime --> Shell["Local terminal runner"]
   Runtime --> Harness["Harness engine"]
   Harness --> Evidence
   Providers --> Evidence["Artifacts, evidence, reports"]
+  API --> Evidence
+  MCP --> Evidence
   Shell --> Evidence
   Evidence --> DBC
 ```
@@ -25,6 +30,11 @@ flowchart LR
 - `src/App.tsx` renders the main desktop shell: Control Tower, Projects, Workspace, Guided Run, Tasks, AI Team, Loop Monitor, Approvals, Reports, and Settings.
 - `src/tauriBridge.ts` contains the client contract for native commands and browser fallback behavior.
 - `src/cliContracts.ts` mirrors provider argument normalization used by the backend.
+- `src/providerAdapters.ts`, `src/providerStreams.ts`, and `src/apiAdapters.ts` define
+  versioned CLI/API contracts and normalized output/usage.
+- `src/routing.ts` resolves capability-aware primary/fallback role routes.
+- `src/mcp.ts` owns MCP connection validation, tool intent classification, and the
+  frontend policy mirror.
 - `src/storage.ts` keeps browser-local MVP state for fast iteration when native storage is unavailable.
 
 The UI is intentionally operator-facing. Guided Run is the normal path from TZ intake to final decision. Expert screens still surface gates, approvals, provider diagnostics, evidence, and recovery paths rather than hiding them behind a single "run agent" button.
@@ -43,11 +53,16 @@ DBC uses `.dbc/` as the portable project workspace. Important paths include:
 
 - `.dbc/providers.yaml` for provider profiles and role routing.
 - `.dbc/policy.yaml` for command policy, approvals, denied commands, and redaction.
+- `.dbc/mcp-connections.yaml` and `.dbc/tool-policies.yaml` for portable MCP contracts;
+  only OS keychain references may appear, never credential contents.
+- `.dbc/model-catalog.yaml` for source-backed model metadata.
 - `.dbc/tasks/` for task contracts.
 - `.dbc/memory/` for project notes injected into loop prompts.
 - `.dbc/loops/` for portable run manifests.
 - `.dbc/artifacts/`, `.dbc/evidence/`, `.dbc/reports/`, `.dbc/security/`, and `.dbc/git/` for audit output.
 - Harness artifacts link TaskContract, WorkSlice, HarnessRun, EvidencePack, and final decision records.
+- `.dbc/evidence/mcp/*.jsonl` records redacted tool decisions/outcomes and
+  `.dbc/evidence/<run>/routing-fallback.json` records routing/fallback decisions.
 
 Generated `.dbc` runtime data is ignored in this repository. A safe example workspace lives in `examples/dbc-workspace/.dbc/`.
 
@@ -124,7 +139,26 @@ Providers are assigned by role:
 - QA, Reviewer, and Security can inspect output and evidence.
 - Local Terminal runs allow-listed build/test commands.
 
-Provider routing is configurable and can use mock mode, Codex CLI, Claude Code CLI, a generic CLI adapter, or local terminal commands. Real provider mode is approval-gated and budget-guarded.
+Provider routing is configurable and can use mock mode, Codex CLI, Claude Code CLI,
+Kimi Code, Qwen Code, a generic CLI adapter, local terminal commands, or disabled
+OpenAI-compatible API profiles. Each HarnessRun seals the configured/effective adapter,
+model, fallback graph, execution mode, MCP ids, and stable checksum. Real provider mode
+is approval-gated and budget-guarded.
+
+## MCP Policy Boundary
+
+Connections start disabled. Stdio discovery performs JSON-RPC initialize and tools/list
+without invoking a tool. At execution time the DBC proxy evaluates tool intent,
+allow/deny paths, external hosts, argument limits, retries, idempotency, and a run-scoped
+approval ledger before forwarding `tools/call`. Raw arguments, secrets, and complete tool
+outputs are not persisted in evidence.
+
+## EvidencePack v2
+
+EvidencePack schema v2 verifies required TaskContract, WorkSlice, and HarnessRun
+artifacts, seals the execution identity checksum, summarizes MCP and routing activity,
+and records provider usage only with an explicit confidence state. Native acceptance
+rejects legacy or incomplete verification and still requires exact run/pack identity.
 
 ## Git Safety Boundary
 

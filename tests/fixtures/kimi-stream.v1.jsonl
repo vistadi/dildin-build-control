@@ -1,0 +1,3 @@
+{"role":"assistant","content":"I will inspect the approved scope.","tool_calls":[{"id":"kimi-tool-1","function":{"name":"ReadFile","arguments":"{\"path\":\"README.md\"}"}}]}
+{"role":"tool","tool_call_id":"kimi-tool-1","content":"README contents"}
+{"role":"assistant","content":"Final Kimi review: no blocking issue.","usage":{"input_tokens":10,"output_tokens":5}}

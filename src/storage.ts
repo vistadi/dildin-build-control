@@ -1,5 +1,8 @@
 import { defaultAgents, defaultCommandPolicy, defaultProviders, initialState, loopTemplate } from "./data";
 import { normalizeProviderConfig } from "./cliContracts";
+import { defaultRoutingPolicies, normalizeRoutingPolicyId } from "./routing";
+import { defaultMcpServers, defaultToolPolicies, normalizeMcpConnection } from "./mcp";
+import { curatedModelCatalog, mergeVerifiedModelCatalog } from "./apiAdapters";
 import type { AppState } from "./types";
 
 const STORAGE_KEY = "dbc.mvp.state.v1";
@@ -29,7 +32,9 @@ export function uid(prefix: string) {
 }
 
 function normalizeState(state: Partial<AppState>): AppState {
-  const providers = state.providers?.length
+  const { uiLanguage: _legacyUiLanguage, ...persistedState } = state as Partial<AppState> & { uiLanguage?: unknown };
+  void _legacyUiLanguage;
+  const persistedProviders = state.providers?.length
     ? state.providers.map((provider) => {
         const defaultProvider = defaultProviders.find((item) => item.id === provider.id);
         const migratedProvider = {
@@ -55,6 +60,16 @@ function normalizeState(state: Partial<AppState>): AppState {
         return normalizeProviderConfig(migratedProvider);
       })
     : defaultProviders;
+  const providers = [
+    ...persistedProviders,
+    ...defaultProviders.filter((provider) => !persistedProviders.some((item) => item.id === provider.id)),
+  ];
+  const routingPolicies = state.routingPolicies?.length
+    ? [
+        ...state.routingPolicies,
+        ...defaultRoutingPolicies.filter((policy) => !state.routingPolicies?.some((item) => item.id === policy.id)),
+      ]
+    : defaultRoutingPolicies;
   const agents = state.agents?.length
     ? state.agents.map((agent) => {
         const defaultAgent = defaultAgents.find((item) => item.id === agent.id);
@@ -74,10 +89,15 @@ function normalizeState(state: Partial<AppState>): AppState {
 
   return {
     ...initialState,
-    ...state,
+    ...persistedState,
+    telemetryEnabled: state.telemetryEnabled === true,
     providers,
     agents,
+    routingPolicies,
+    modelCatalog: mergeVerifiedModelCatalog(curatedModelCatalog, state.modelCatalog ?? []),
     commandPolicy: state.commandPolicy ?? defaultCommandPolicy,
+    mcpServers: state.mcpServers?.length ? state.mcpServers.map(normalizeMcpConnection) : defaultMcpServers(),
+    toolPolicies: state.toolPolicies?.length ? state.toolPolicies : defaultToolPolicies,
     tasks: state.tasks?.length
       ? state.tasks.map((task) => ({
           ...task,
@@ -85,6 +105,7 @@ function normalizeState(state: Partial<AppState>): AppState {
           priority: task.priority ?? "normal",
           loopProfile: task.loopProfile ?? "mock",
           providerStrategy: task.providerStrategy ?? "codex_build_claude_review",
+          routingPolicyId: normalizeRoutingPolicyId(task.routingPolicyId, task.providerStrategy, routingPolicies),
           affectedPaths: task.affectedPaths ?? [],
           allowedPaths: task.allowedPaths ?? task.affectedPaths ?? [],
           deniedPaths: task.deniedPaths ?? [],
