@@ -56,6 +56,19 @@ jobs:
       - name: Run Guided Run smoke check
         run: pnpm guided-run-smoke
 
+      - name: Verify provider and MCP contracts
+        run: |
+          pnpm provider-adapter-smoke
+          pnpm mcp-policy-smoke
+          pnpm mcp-proxy-smoke
+          pnpm api-adapter-smoke
+
+      - name: Verify UI, native bridge, and performance contracts
+        run: |
+          pnpm ui-quality-smoke
+          pnpm native-contract-smoke
+          pnpm performance-budget
+
       - name: Verify a deterministic EvidencePack
         run: |
           pnpm controlled-smoke

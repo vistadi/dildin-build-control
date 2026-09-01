@@ -59,7 +59,7 @@ After a verified release, generate a Homebrew Cask with:
 
 ```bash
 pnpm homebrew-cask -- \
-  --version 0.1.1 \
+  --version 0.2.0 \
   --arm64-sha <published-arm64-sha256> \
   --x64-sha <published-x64-sha256>
 ```

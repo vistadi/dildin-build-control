@@ -6,6 +6,14 @@ The project follows [Semantic Versioning](https://semver.org/) while release sta
 
 ## [Unreleased]
 
+### Planned
+
+- Signed and notarized macOS distribution.
+- Installed-version Kimi/Qwen fixtures and approved remote OAuth MCP conformance.
+- A compact Guided Run demo video or GIF.
+
+## [0.2.0-alpha.1] - 2026-09-01
+
 ### Added
 
 - A deterministic, side-effect-free browser preview of the full Guided Run lifecycle.
@@ -19,6 +27,8 @@ The project follows [Semantic Versioning](https://semver.org/) while release sta
 - Disabled keychain-only Kimi/Qwen API profiles, source-backed model catalog, and
   normalized reports/usage.
 - EvidencePack v2 artifact verification, routing/MCP summaries, and unknown-safe usage.
+- Dibi, a border-collie product mascot, a complete Dibi Workshop visual system, and a
+  regenerated desktop icon family.
 - English-only navigation, accessibility/CSP hardening, UI/native quality smokes, and
   production asset performance budgets.
 
@@ -37,12 +47,6 @@ The project follows [Semantic Versioning](https://semver.org/) while release sta
 - Final Guided Run decisions can no longer be accepted repeatedly.
 - Controlled smoke supports an explicit local-only waiver for pre-existing outside-scope
   worktree changes while denied paths still fail.
-
-### Planned
-
-- Signed and notarized macOS distribution.
-- Installed-version Kimi/Qwen fixtures and approved remote OAuth MCP conformance.
-- A compact Guided Run demo video or GIF.
 
 ## [0.1.1-alpha.3] - 2026-07-20
 
@@ -97,7 +101,8 @@ The project follows [Semantic Versioning](https://semver.org/) while release sta
 - Git branch, stage, commit, push, deploy, reset, clean, and destructive checkout remain manual.
 - Secret-like real-provider prompts are blocked and persisted output is redacted.
 
-[Unreleased]: https://github.com/vistadi/dildin-build-control/compare/v0.1.1-alpha.3...HEAD
+[Unreleased]: https://github.com/vistadi/dildin-build-control/compare/v0.2.0-alpha.1...HEAD
+[0.2.0-alpha.1]: https://github.com/vistadi/dildin-build-control/releases/tag/v0.2.0-alpha.1
 [0.1.1-alpha.3]: https://github.com/vistadi/dildin-build-control/releases/tag/v0.1.1-alpha.3
 [0.1.1-alpha.2]: https://github.com/vistadi/dildin-build-control/releases/tag/v0.1.1-alpha.2
 [0.1.1-alpha.1]: https://github.com/vistadi/dildin-build-control/releases/tag/v0.1.1-alpha.1

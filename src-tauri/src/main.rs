@@ -1047,7 +1047,7 @@ fn test_mcp_connection(request: McpConnectionCheckRequest) -> McpConnectionCheck
         "params": {
             "_meta": {
                 "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientInfo": {"name": "dbc", "version": "0.1.1"},
+                "io.modelcontextprotocol/clientInfo": {"name": "dbc", "version": env!("CARGO_PKG_VERSION")},
                 "io.modelcontextprotocol/clientCapabilities": {}
             }
         }
@@ -1087,7 +1087,7 @@ fn test_mcp_connection(request: McpConnectionCheckRequest) -> McpConnectionCheck
             "params": {
                 "_meta": {
                     "io.modelcontextprotocol/protocolVersion": version,
-                    "io.modelcontextprotocol/clientInfo": {"name": "dbc", "version": "0.1.1"},
+                    "io.modelcontextprotocol/clientInfo": {"name": "dbc", "version": env!("CARGO_PKG_VERSION")},
                     "io.modelcontextprotocol/clientCapabilities": {}
                 }
             }
@@ -1111,7 +1111,7 @@ fn test_mcp_connection(request: McpConnectionCheckRequest) -> McpConnectionCheck
             "params": {
                 "protocolVersion": "2025-11-25",
                 "capabilities": {},
-                "clientInfo": {"name": "dbc", "version": "0.1.1"}
+                "clientInfo": {"name": "dbc", "version": env!("CARGO_PKG_VERSION")}
             }
         });
         let _ = writeln!(stdin, "{initialize}");

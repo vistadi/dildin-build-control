@@ -29,7 +29,7 @@ if (!validVersion(version) || !validSha(arm64Sha) || !validSha(x64Sha) || !tag) 
   console.error(
     [
       "Usage:",
-      "  pnpm homebrew-cask -- --version 0.1.1 --arm64-sha <64 hex chars> --x64-sha <64 hex chars> [--tag v0.1.1]",
+      "  pnpm homebrew-cask -- --version 0.2.0 --arm64-sha <64 hex chars> --x64-sha <64 hex chars> [--tag v0.2.0-alpha.1]",
       "",
       "Real published SHA-256 values are required; placeholders are rejected.",
     ].join("\n"),

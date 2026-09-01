@@ -448,3 +448,38 @@ smoke contracts, screenshots, README, design QA, and project memory.
 The application always renders English copy and `lang=en`. Existing browser-local
 state created by bilingual builds remains loadable, but its old locale preference is
 ignored and removed on the next save.
+
+## 2026-09-01 — Release the new product baseline as v0.2.0-alpha.1
+
+Status: accepted
+
+### Context
+
+The changes since `v0.1.1-alpha.3` add provider-neutral Kimi/Qwen contracts, MCP
+connections and policy mediation, EvidencePack v2, dynamic routing, a new Dibi Workshop
+identity, and an English-only primary experience. Keeping the `0.1.1` base version would
+understate the expanded alpha contract.
+
+### Decision
+
+Advance the application version to `0.2.0` and prepare the public prerelease tag
+`v0.2.0-alpha.1`. Publish it only after the complete release quality gate and both
+macOS architecture jobs succeed. Treat artifacts as unsigned and not notarized unless
+the published packages independently pass Developer ID, Gatekeeper, and stapler checks.
+
+### Rationale
+
+A minor-version alpha communicates a materially broader product surface without
+claiming stable compatibility or production readiness. The prerelease label preserves
+the current early-product expectations and keeps signing claims evidence-based.
+
+### Affected modules
+
+Package/Tauri/Cargo metadata, MCP client identity, changelog, installation and signing
+documentation, GitHub release workflow, distribution artifacts, and project memory.
+
+### Consequences
+
+The release workflow produces Apple Silicon and Intel packages plus SHA-256 manifests.
+Homebrew publication, signed/notarized language, and trusted-distribution claims remain
+blocked until the published artifacts pass the recorded signing acceptance checks.

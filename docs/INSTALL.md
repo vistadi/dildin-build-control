@@ -16,13 +16,13 @@ Download the matching DMG and SHA-256 file from [GitHub Releases](https://github
 Place the DMG and its `.sha256` file in the same folder. In Terminal, change to that folder and run the matching command:
 
 ```bash
-shasum -a 256 -c Dildin_Build_Control_0.1.1_arm64.sha256
+shasum -a 256 -c Dildin_Build_Control_0.2.0_arm64.sha256
 ```
 
 or:
 
 ```bash
-shasum -a 256 -c Dildin_Build_Control_0.1.1_x64.sha256
+shasum -a 256 -c Dildin_Build_Control_0.2.0_x64.sha256
 ```
 
 Continue only when the result ends with `OK`.

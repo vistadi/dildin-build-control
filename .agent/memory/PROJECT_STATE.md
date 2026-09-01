@@ -1,6 +1,6 @@
 # DBC Project State
 
-Last verified: 2026-08-31
+Last verified: 2026-09-01
 
 ## Architecture
 
@@ -52,7 +52,7 @@ Last verified: 2026-08-31
 - UI hardening includes English navigation and primary actions, fixed `lang=en`,
   skip navigation, keyboard focus, reduced motion, local-only opt-in diagnostics, CSP,
   responsive layouts, and enforced JS/CSS performance budgets.
-- The production frontend build passed at 416,915 B JS / 112,648 B gzip and 40,694 B
+- The production frontend build passed at 417,099 B JS / 112,762 B gzip and 40,694 B
   CSS / 8,161 B gzip, within the recorded budgets. The Dibi mark and workshop image add
   271,886 B and 558,444 B respectively to the production assets.
 - Rust tests passed: 36 passed, 0 failed. TypeScript and Vite build passed. Provider,
@@ -65,14 +65,15 @@ Last verified: 2026-08-31
 
 ## Distribution state
 
-- Repository version remains `0.1.1` pending a deliberate version/release decision.
+- Release metadata is aligned at `0.2.0` for the proposed `v0.2.0-alpha.1` prerelease.
+  The tag and GitHub Release have not yet been created.
 - A fresh local arm64 app and DMG containing the English-only Dibi Workshop UI and
-  system icon were built on 2026-08-31. The DMG is 10,185,774 bytes, passed
+  system icon were built on 2026-09-01. The DMG is 10,184,739 bytes, passed
   `hdiutil verify`, and has SHA-256
-  `4e13bf48234381258e668081e08e348591a37c4ac1976c6bbb0faf6b74e51d5a`.
+  `27ed30f055736df654ad4dc1640f7b46333b36ecc947f9edefc46a2345cf3968`.
 - The current local bundle is at
   `src-tauri/target/release/bundle/macos/Dildin Build Control.app`; the DMG is at
-  `src-tauri/target/release/bundle/dmg/Dildin Build Control_0.1.1_aarch64.dmg`. This
+  `src-tauri/target/release/bundle/dmg/Dildin Build Control_0.2.0_aarch64.dmg`. This
   task did not install the new bundle into `/Applications`.
 - `/Applications/Dildin Build Control.app` was last updated from the 2026-08-12 bundle;
   its binary checksum then matched that build
@@ -80,13 +81,17 @@ Last verified: 2026-08-31
   The previous bundle is recoverable at
   `/private/tmp/dbc-desktop-backup-20260812-1438/Dildin Build Control.app`.
 - The previously installed 2026-08-12 application launched successfully and its native
-  process was observed. The current 2026-08-31 package is arm64 only and
-  ad-hoc/linker-signed; strict codesign/Gatekeeper checks do not pass.
+  process was observed. The current 2026-09-01 package is arm64 only and
+  ad-hoc/linker-signed with no Team ID. Strict Developer ID, Gatekeeper, and
+  notarization claims are not valid.
 - Apple Developer ID credentials are not present. No current build may be described as
   signed or notarized, and Homebrew publication still requires verified release hashes.
-- The provider/MCP/Evidence v2 checkpoint is committed as `9950833`; the Dibi Workshop
-  and English-only UI checkpoint is committed as `1b2cfa2`. Neither commit has been
-  pushed.
+- The provider/MCP/Evidence v2 checkpoint `9950833`, Dibi Workshop/English-only UI
+  checkpoint `1b2cfa2`, and memory checkpoint `27284fc` are committed and pushed to
+  `origin/main`.
+- The release workflow now gates packaging on provider, MCP policy/proxy, API adapter,
+  UI, native bridge, performance, deterministic EvidencePack, frontend, formatting,
+  and Rust checks before building both macOS architectures.
 
 ## Known limitations
 

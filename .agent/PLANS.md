@@ -17,8 +17,7 @@ verify both architectures before publishing Homebrew installation instructions.
 
 ## Dibi Workshop brand and Guided Run redesign
 
-Status: implemented, locally verified, and committed on 2026-08-31; changes have not
-been pushed.
+Status: implemented, locally verified, committed, and pushed to `main`.
 
 - Keep DBC as the product name and use Dibi, a border collie, as the recognizable
   product mascot.
@@ -37,8 +36,9 @@ updated, the runtime was reduced to one complete English interface, all automate
 passed, and a verified local arm64 `.app` and DMG were built with the Dibi icon. The
 implementation is recorded in `9950833` and `1b2cfa2`.
 
-Next checkpoint: push only after separate approval, then produce a signed/notarized
-universal release when Apple credentials are available.
+Next checkpoint: publish and verify `v0.2.0-alpha.1` as an explicitly unsigned
+prerelease, then produce a signed/notarized release when Apple credentials are
+available.
 
 ## Priority product improvements
 
@@ -60,8 +60,8 @@ signed/notarized universal macOS release after Apple credentials are available.
 
 ## UI/UX, MCP, Kimi and Qwen master plan
 
-Status: functional slices Phase 0–6 were implemented, locally verified, and committed as
-`9950833` on 2026-08-31. Native installed-CLI fixtures, approved remote OAuth MCP conformance,
+Status: functional slices Phase 0–6 were implemented, locally verified, committed as
+`9950833`, and pushed to `main`. Native installed-CLI fixtures, approved remote OAuth MCP conformance,
 frontend feature decomposition, full translation coverage, and signed/notarized release
 verification remain external or hardening checkpoints.
 
