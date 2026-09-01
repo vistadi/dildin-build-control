@@ -65,8 +65,10 @@ Last verified: 2026-09-01
 
 ## Distribution state
 
-- Release metadata is aligned at `0.2.0` for the proposed `v0.2.0-alpha.1` prerelease.
-  The tag and GitHub Release have not yet been created.
+- Release metadata is aligned at `0.2.0`. Tag `v0.2.0-alpha.1` points to release commit
+  `8f12f95`; its complete quality gate passed, but both macOS packaging jobs failed
+  before a GitHub Release was created. The proposed non-destructive follow-up is
+  `v0.2.0-alpha.2`.
 - A fresh local arm64 app and DMG containing the English-only Dibi Workshop UI and
   system icon were built on 2026-09-01. The DMG is 10,184,739 bytes, passed
   `hdiutil verify`, and has SHA-256
@@ -91,7 +93,9 @@ Last verified: 2026-09-01
   `origin/main`.
 - The release workflow now gates packaging on provider, MCP policy/proxy, API adapter,
   UI, native bridge, performance, deterministic EvidencePack, frontend, formatting,
-  and Rust checks before building both macOS architectures.
+  and Rust checks before building both macOS architectures. Its current alpha path is
+  explicitly unsigned and does not pass empty Apple signing/notarization variables to
+  the Tauri bundler.
 
 ## Known limitations
 

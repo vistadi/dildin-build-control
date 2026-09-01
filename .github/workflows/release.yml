@@ -123,19 +123,13 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Dildin Build Control ${{ github.ref_name }}"
           releaseBody: |
             Automated prerelease build of Dildin Build Control. Review the changelog and installation guide before running it.
 
-            Verify the published checksum and the macOS signing/notarization state before installation. Signing is enabled only when the repository Apple secrets are configured and the published artifact passes the checks in docs/RELEASE_SIGNING.md.
+            This build is unsigned and not notarized. macOS may display a Gatekeeper warning. Verify the published checksum before installation and follow docs/INSTALL.md.
 
             Run the deterministic safe preview or mock mode first. Do not place credentials in project files.
           releaseDraft: false

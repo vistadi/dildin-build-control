@@ -451,7 +451,7 @@ ignored and removed on the next save.
 
 ## 2026-09-01 — Release the new product baseline as v0.2.0-alpha.1
 
-Status: accepted
+Status: superseded by `2026-09-01 — Publish the first downloadable 0.2 alpha as v0.2.0-alpha.2`
 
 ### Context
 
@@ -483,3 +483,39 @@ documentation, GitHub release workflow, distribution artifacts, and project memo
 The release workflow produces Apple Silicon and Intel packages plus SHA-256 manifests.
 Homebrew publication, signed/notarized language, and trusted-distribution claims remain
 blocked until the published artifacts pass the recorded signing acceptance checks.
+
+## 2026-09-01 — Publish the first downloadable 0.2 alpha as v0.2.0-alpha.2
+
+Status: accepted
+
+### Context
+
+The `v0.2.0-alpha.1` quality gate passed, but both macOS jobs failed in the shared
+Tauri packaging step before a GitHub Release existed. Compared with the last successful
+release workflow, the failed workflow newly passed Apple signing/notarization variables
+even though no verified Apple credentials are available. Rewriting the pushed alpha.1
+tag would weaken the Git audit trail.
+
+### Decision
+
+Keep `v0.2.0-alpha.1` as an immutable record of the failed packaging attempt. Restore
+the known unsigned alpha path by omitting Apple signing/notarization variables entirely,
+state the unsigned status explicitly in release copy, and publish the corrected build
+as `v0.2.0-alpha.2` after the same complete quality gate succeeds.
+
+### Rationale
+
+An additive prerelease tag preserves history and avoids destructive remote tag
+rewriting. Omitting unavailable credentials matches Tauri's documented environment
+contract and the last workflow that successfully produced both macOS architectures.
+
+### Affected modules
+
+`.github/workflows/release.yml`, changelog, release tags, distribution memory, and
+release worklog.
+
+### Consequences
+
+The alpha.2 artifacts must be described as unsigned and not notarized. Future signing
+support should use a separately verified signed-release workflow or explicit conditional
+jobs rather than injecting empty signing variables into the unsigned path.

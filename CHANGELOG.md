@@ -12,7 +12,7 @@ The project follows [Semantic Versioning](https://semver.org/) while release sta
 - Installed-version Kimi/Qwen fixtures and approved remote OAuth MCP conformance.
 - A compact Guided Run demo video or GIF.
 
-## [0.2.0-alpha.1] - 2026-09-01
+## [0.2.0-alpha.2] - 2026-09-01
 
 ### Added
 
@@ -47,6 +47,15 @@ The project follows [Semantic Versioning](https://semver.org/) while release sta
 - Final Guided Run decisions can no longer be accepted repeatedly.
 - Controlled smoke supports an explicit local-only waiver for pre-existing outside-scope
   worktree changes while denied paths still fail.
+- Unsigned GitHub packaging no longer passes empty Apple signing and notarization
+  variables to the Tauri bundler.
+
+## [0.2.0-alpha.1] - 2026-09-01
+
+### Release status
+
+- The release quality gate passed, but both macOS packaging jobs failed before a
+  GitHub Release was created. The immutable follow-up is `v0.2.0-alpha.2`.
 
 ## [0.1.1-alpha.3] - 2026-07-20
 
@@ -101,8 +110,9 @@ The project follows [Semantic Versioning](https://semver.org/) while release sta
 - Git branch, stage, commit, push, deploy, reset, clean, and destructive checkout remain manual.
 - Secret-like real-provider prompts are blocked and persisted output is redacted.
 
-[Unreleased]: https://github.com/vistadi/dildin-build-control/compare/v0.2.0-alpha.1...HEAD
-[0.2.0-alpha.1]: https://github.com/vistadi/dildin-build-control/releases/tag/v0.2.0-alpha.1
+[Unreleased]: https://github.com/vistadi/dildin-build-control/compare/v0.2.0-alpha.2...HEAD
+[0.2.0-alpha.2]: https://github.com/vistadi/dildin-build-control/releases/tag/v0.2.0-alpha.2
+[0.2.0-alpha.1]: https://github.com/vistadi/dildin-build-control/tree/v0.2.0-alpha.1
 [0.1.1-alpha.3]: https://github.com/vistadi/dildin-build-control/releases/tag/v0.1.1-alpha.3
 [0.1.1-alpha.2]: https://github.com/vistadi/dildin-build-control/releases/tag/v0.1.1-alpha.2
 [0.1.1-alpha.1]: https://github.com/vistadi/dildin-build-control/releases/tag/v0.1.1-alpha.1
