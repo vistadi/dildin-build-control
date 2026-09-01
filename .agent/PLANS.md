@@ -36,9 +36,10 @@ updated, the runtime was reduced to one complete English interface, all automate
 passed, and a verified local arm64 `.app` and DMG were built with the Dibi icon. The
 implementation is recorded in `9950833` and `1b2cfa2`.
 
-Next checkpoint: publish and verify `v0.2.0-alpha.2` as an explicitly unsigned
-prerelease, then produce a signed/notarized release when Apple credentials are
-available.
+Release checkpoint: `v0.2.0-alpha.2` was published and verified as an explicitly
+unsigned prerelease on 2026-09-01 with arm64/x64 DMGs, app archives, and matching
+checksum manifests. Next checkpoint: produce a signed/notarized release when Apple
+credentials are available.
 
 ## Priority product improvements
 
