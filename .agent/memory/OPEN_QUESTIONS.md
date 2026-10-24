@@ -29,6 +29,17 @@
   and tool-budget flags through a capability probe; do not claim a hard minimum yet.
 - Owner: provider integration maintainer.
 - Status: open.
+- Research update (2026-10-11): the official 2026-09-10 Qwen update describes Plan
+  as separate from permission mode, while the current approval/headless references
+  still document `--approval-mode plan`. DBC's template, argument normalizer, and
+  backend gate require that value. Resolve the discrepancy with a pinned installed
+  CLI fixture; neither a confirmed incompatibility nor a safe replacement is proven.
+  See `worklog/2026-10-11-current-ecosystem-improvements.md` for sources and acceptance
+  criteria. Kimi/Qwen were not found on this session's PATH; no model call was made.
+- Implementation update (2026-10-24): bounded help/version probes now require the
+  turn/time/tool limits and declared plan/stream-json option values. Official October
+  references still document plan. Synthetic fixtures pass, but a pinned installed-CLI
+  fixture is still required; this question remains open.
 
 ## Resolved
 

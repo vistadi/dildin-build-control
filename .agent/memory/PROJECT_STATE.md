@@ -1,6 +1,10 @@
 # DBC Project State
 
-Last verified: 2026-09-01
+Last verified source/build/test update: 2026-10-24 (`c4b4287`, based on `d688407`).
+Runtime implementation is pushed to `codex/native-execution-diagnostics`; remote
+`main` was independently checked at `d688407`. The distribution and
+installation observations below remain dated 2026-09-01 or earlier; no new release,
+installation, live-provider fixture or native-window end-to-end QA was performed.
 
 ## Architecture
 
@@ -52,19 +56,42 @@ Last verified: 2026-09-01
 - UI hardening includes English navigation and primary actions, fixed `lang=en`,
   skip navigation, keyboard focus, reduced motion, local-only opt-in diagnostics, CSP,
   responsive layouts, and enforced JS/CSS performance budgets.
-- The production frontend build passed at 417,099 B JS / 112,762 B gzip and 40,694 B
-  CSS / 8,161 B gzip, within the recorded budgets. The Dibi mark and workshop image add
+- The 2026-10-24 production frontend build passed at 423,305 B JS / 115,364 B gzip
+  and 41,468 B CSS / 8,308 B gzip, within the recorded budgets. The Dibi mark and workshop image add
   271,886 B and 558,444 B respectively to the production assets.
-- Rust tests passed: 36 passed, 0 failed. TypeScript and Vite build passed. Provider,
+- Rust tests passed: 51 passed, 0 failed. Offline native debug build, TypeScript and
+  Vite build passed. Provider,
   MCP policy, MCP proxy, API adapter, Guided Run, UI quality, native contract, and
   performance checks passed; the complete final rerun is recorded in the current
-  worklog.
-- Visual QA compared the selected 1487×1058 concept and implementation in one raster,
+  worklog. Controlled smoke used a temporary build-only adapter for the unavailable
+  pnpm entry point; this does not certify pnpm installation or a live provider.
+- Native CLI execution now drains stdout/stderr concurrently with bounded head/tail
+  buffers, concurrent stdin, timeout, cancellation and child reaping. Incomplete
+  output fails acceptance even when it contains a passing verdict. Unix owned process
+  groups are terminated; this is not an operating-system sandbox.
+- Provider help/version probes have a five-second deadline and bounded output. Qwen
+  setup checks require declared plan/stream-json values and turn/time/tool budgets.
+  These are help-text checks, not proof of model access or installed-version conformance.
+- Settings exposes compile-time build version/label/SHA/source state/time/target/profile
+  and runtime executable path; signing remains explicitly unverified. Native process
+  activity exposes metadata and Stop, not prompts or output. Loop advancement and
+  retry/resume/approval mutations are serialized per loop. Stop also covers preparation
+  of an already registered loop operation, and late frontend results are ignored.
+- New diagnostics were checked in browser preview at 375/768/1440 widths with long
+  fixture values, disabled stop state, keyboard navigation, and no console warnings or
+  errors. Native bridge behavior is covered by Rust/contract tests, not native-window QA.
+- On 2026-09-01, visual QA compared the selected 1487×1058 concept and implementation in one raster,
   then verified 1487×1058 desktop, 1024×768 tablet, and 430×932 mobile states. No P0,
   P1, or P2 findings remain; the final browser console had no warnings or errors.
 
 ## Distribution state
 
+- The 2026-10-24 runtime improvement commit `c4b4287` is published on the feature
+  branch `codex/native-execution-diagnostics`, not merged to `main`. The maintainer
+  explicitly approved the implementation and memory commits, push and PR. PR creation
+  through the connector returned HTTP 403 (resource not accessible by integration);
+  the browser alternative requires the maintainer to sign in. No PR number is claimed,
+  no access permissions were changed, and no new release was published.
 - Release metadata is aligned at `0.2.0`. Tag `v0.2.0-alpha.1` points to release commit
   `8f12f95`; its complete quality gate passed, but both macOS packaging jobs failed
   before a GitHub Release was created. The non-destructive follow-up
@@ -107,6 +134,16 @@ Last verified: 2026-09-01
 ## Known limitations
 
 - The product remains an early alpha.
+- The 2026-10-11 pipe-draining finding was addressed on 2026-10-24 and tested with
+  deterministic local processes exceeding pipe capacity. Other subprocess paths
+  (for example Git/MCP helpers) were not migrated wholesale. Non-Unix descendant
+  termination is not implemented; detached descendants escaping the owned Unix group
+  are outside the guarantee. Stop is not rollback or a durable database pause command.
+- The Qwen profile still requires `--approval-mode plan`. Current official Qwen
+  references and the 2026-09-10 changelog disagree about Plan/permission semantics.
+  A pinned-version compatibility fixture is needed before changing the guard.
+- The bundled model catalog in `src/apiAdapters.ts` still records `2026-08-12`
+  verification dates. Those entries are not evidence of current account availability.
 - Kimi/Qwen installed-version and live model fixtures were not run because the CLIs and
   approved credentials are unavailable on this Mac.
 - Remote Streamable HTTP/OAuth MCP discovery and conformance are not live-tested.
@@ -123,8 +160,20 @@ Last verified: 2026-09-01
 
 ## Immediate priorities
 
-1. Validate harmless installed Kimi/Qwen fixtures and one approved remote OAuth MCP
-   conformance server when those external dependencies are available.
-2. Split `App.tsx` into Run, Evidence, Connections, and Provider feature modules.
-3. Complete independent accessibility testing for the English-only product surface.
-4. Configure Apple release credentials and verify both architectures before publishing.
+Next priorities after the approved 2026-10-24 implementation milestone:
+
+1. Complete the approved PR after browser sign-in, review it, then validate native UI
+   stop/resume and pinned Kimi/Qwen contracts;
+   keep existing blocked/zero-tool profiles until replacement safeguards are verified.
+2. Prototype one interactive agent integration (Kimi ACP or Codex app-server) with
+   DBC-owned approval, cancellation, session identity, and evidence. ACP is not MCP
+   and is not an operating-system sandbox.
+3. Validate one approved remote OAuth MCP server, then extend connection UX and
+   protocol conformance rather than merely changing the advertised protocol version.
+4. Split touched Run, Evidence, Connections, and Provider modules as needed for these
+   changes; complete English-only accessibility testing.
+5. Verify the new build identity on packaged artifacts; configure Apple credentials and verify both
+   architectures before claiming signed/notarized distribution.
+
+Detailed proposals, source dates, uncertainties, and acceptance criteria:
+`worklog/2026-10-11-current-ecosystem-improvements.md`.

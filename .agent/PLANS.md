@@ -1,5 +1,27 @@
 # DBC Active Plans
 
+## 2026-10-24 — Reliable native execution and build diagnostics
+
+Status: implemented and locally verified; runtime commit `c4b4287` is pushed to
+`codex/native-execution-diagnostics`. Both commits, push and PR were explicitly
+approved on 2026-10-24. PR creation is blocked by the connector's HTTP 403 and a
+signed-out browser session; no integration permissions were expanded.
+User requested current review, a plan, implementation, and GitHub publication.
+Preserve the existing October research changes; no main-branch merge or release is
+included. See `memory/worklog/2026-10-24-native-execution-and-diagnostics.md` for
+verification, remaining limitations and the approved two-commit inventory.
+
+1. Extract a bounded process runner: concurrent pipe draining, input delivery,
+   timeout/cancellation, process reaping, partial evidence, and deterministic fixtures.
+2. Bound provider probes and validate required Qwen modes/budgets without enabling
+   Kimi or weakening the existing zero-tool gate. Label setup checks honestly.
+3. Add native build identity and process activity/stop UI in existing English Dibi
+   styling. Do not claim signing/notarization or live-provider testing.
+4. Verify Rust, frontend, provider/native/UI/performance contracts and responsive UI.
+5. Update durable memory, review explicit file groups, then publish an approved
+   feature branch/PR to GitHub. Keep paid calls, ACP/OAuth expansion, auto-update,
+   signing, and release publication outside this bounded milestone.
+
 ## Evidence-first alpha activation
 
 Status: completed, committed, and pushed to `main`.
@@ -63,7 +85,7 @@ signed/notarized universal macOS release after Apple credentials are available.
 
 Status: functional slices Phase 0–6 were implemented, locally verified, committed as
 `9950833`, and pushed to `main`. Native installed-CLI fixtures, approved remote OAuth MCP conformance,
-frontend feature decomposition, full translation coverage, and signed/notarized release
+frontend feature decomposition, English-copy/accessibility coverage, and signed/notarized release
 verification remain external or hardening checkpoints.
 
 - Preserve Run, Approvals, Evidence, and Settings as the result-oriented primary IA.
@@ -84,6 +106,6 @@ preset, Team Builder, source-backed model catalog, EvidencePack v2 verification,
 English-only UI, accessibility/CSP hardening, performance budget, and responsive QA.
 
 Next checkpoint: validate supported installed Kimi/Qwen versions and an approved remote
-OAuth MCP fixture, decompose `App.tsx`, complete translation/WCAG audit, then produce and
+OAuth MCP fixture, decompose `App.tsx`, complete English-copy/WCAG audit, then produce and
 verify a signed/notarized universal release when Apple credentials are available. Kimi
 built-in print/AFK tools and paid API calls remain disabled until separately verified.
