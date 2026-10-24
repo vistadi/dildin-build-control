@@ -5,6 +5,7 @@ const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8
 const state = readFileSync(new URL("../src/storage.ts", import.meta.url), "utf8");
 const types = readFileSync(new URL("../src/types.ts", import.meta.url), "utf8");
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+const diagnostics = readFileSync(new URL("../src/components/RuntimeDiagnostics.tsx", import.meta.url), "utf8");
 
 const checks = [
   [app.includes('className="skip-link"') && app.includes('id="main-content"'), "skip link targets the main landmark"],
@@ -18,6 +19,11 @@ const checks = [
   [styles.includes("overflow-x: hidden") && styles.includes("min-width: 0"), "horizontal overflow guard is present"],
   [state.includes("_legacyUiLanguage") && state.includes("persistedState"), "legacy language preference is discarded during migration"],
   [state.includes("telemetryEnabled: state.telemetryEnabled === true"), "telemetry migration defaults to disabled"],
+  [app.includes("<BuildIdentityPanel />") && diagnostics.includes("Browser preview"), "build identity distinguishes native and browser preview"],
+  [diagnostics.includes("role=\"alert\"") && diagnostics.includes("Retry build details"), "build diagnostics includes failure and retry states"],
+  [diagnostics.includes("disabled={pending}") && diagnostics.includes("aria-label={`Stop"), "process stop has pending state and accessible name"],
+  [app.includes("cancelLoopProcesses(currentLoop.id)") && app.includes("if (disposed) return"), "loop stop requests native cancellation and ignores stale results"],
+  [app.includes('setCurrentLoop(current => current ? { ...current, status: "stopped" } : current)'), "stopped loop remains available for explicit resume"],
 ];
 
 const failures = checks.filter(([ok]) => !ok);

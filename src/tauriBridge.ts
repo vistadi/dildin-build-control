@@ -51,6 +51,44 @@ export function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+export interface BuildInfo {
+  version: string;
+  label: string;
+  commit: string;
+  sourceState: "clean" | "dirty" | "unknown";
+  builtAtUnix: string;
+  target: string;
+  profile: string;
+  executablePath: string;
+  signingStatus: string;
+}
+
+export interface CliActivity {
+  id: string;
+  scope: string;
+  label: string;
+  elapsedMs: number;
+  stdoutBytes: number;
+  stderrBytes: number;
+  cancelRequested: boolean;
+}
+
+export async function getBuildInfo(): Promise<BuildInfo | null> {
+  return isTauriRuntime() ? invoke<BuildInfo>("get_build_info") : null;
+}
+
+export async function listActiveCliProcesses(): Promise<CliActivity[]> {
+  return isTauriRuntime() ? invoke<CliActivity[]>("active_cli_processes") : [];
+}
+
+export async function cancelCliProcess(id: string): Promise<boolean> {
+  return isTauriRuntime() ? invoke<boolean>("cancel_cli_process", { id }) : false;
+}
+
+export async function cancelLoopProcesses(loopId: string): Promise<number> {
+  return isTauriRuntime() ? invoke<number>("cancel_loop_processes", { loopId }) : 0;
+}
+
 export async function testSecretRef(secretRef: string) {
   if (!isTauriRuntime()) {
     return {

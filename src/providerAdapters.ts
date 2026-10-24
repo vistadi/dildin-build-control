@@ -111,10 +111,10 @@ export const providerAdapterRegistry: ProviderAdapterDescriptor[] = [
     versionArgs: "--version",
     outputFormat: "stream-json",
     featureFlag: "qwen",
-    requiredHelpFlags: ["--prompt", "--output-format", "--approval-mode", "--safe-mode", "--max-tool-calls"],
+    requiredHelpFlags: ["--prompt", "--output-format", "--approval-mode", "--safe-mode", "--max-tool-calls", "--max-session-turns", "--max-wall-time"],
     authProbe: "qwen-local",
     readOnlyProfile: true,
-    safetyNotes: ["DBC never enables --yolo; controlled write modes require explicit policy and approval."],
+    safetyNotes: ["DBC never enables --yolo; controlled write modes require explicit policy and approval.", "Safe mode disables customizations; it is not an OS sandbox. Zero tool calls does not remove tool schemas from context."],
   },
   {
     id: "generic-cli/v1",

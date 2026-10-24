@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { BuildIdentityPanel, RuntimeActivity } from "./components/RuntimeDiagnostics";
 import { normalizeProviderConfig, parseArgsTemplate as parseCliArgsTemplate, providerContractDiagnostics } from "./cliContracts";
 import { loopTemplate, providerPresets } from "./data";
 import { mergeVerifiedModelCatalog, validateApiProvider } from "./apiAdapters";
@@ -50,6 +51,7 @@ import {
   freezeTaskContract,
   checkCliContract,
   classifyCommand,
+  cancelLoopProcesses,
   discoverCli,
   generateEvidencePack,
   generateRealMicroRunbookReport,
@@ -201,9 +203,12 @@ export function App() {
 
   useEffect(() => {
     if (!running || !currentLoop) return;
+    let disposed = false;
     const timer = window.setTimeout(async () => {
+      try {
       const previousActive = currentLoop.steps[currentLoop.activeStepIndex];
       const nextLoop = await advanceBackendLoop(currentLoop.id, currentLoop);
+      if (disposed) return;
       const executedStep = nextLoop.steps[currentLoop.activeStepIndex] ?? previousActive;
       const stopped = nextLoop.status !== "running" && nextLoop.status !== "completed";
       const approvalId = executedStep?.status === "approval_required" ? `APP-${nextLoop.id}-${executedStep.id}` : "";
@@ -285,9 +290,15 @@ export function App() {
       if (nextLoop.status !== "running") {
         setRunning(false);
       }
+      } catch (error) {
+        if (!disposed) {
+          setRunning(false);
+          recordHarnessError("Loop execution failed", error);
+        }
+      }
     }, 1000);
 
-    return () => window.clearTimeout(timer);
+    return () => { disposed = true; window.clearTimeout(timer); };
   }, [running, currentLoop]);
 
   const activeProject = state.projects.find((project) => project.id === state.activeProjectId) ?? state.projects[0];
@@ -1790,9 +1801,19 @@ export function App() {
     }
   }
 
-  function stopLoop() {
+  async function stopLoop() {
     setRunning(false);
-    setCurrentLoop(null);
+    // Retain the loop for explicit Resume; native evidence is reconciled on resume.
+    setCurrentLoop(current => current ? { ...current, status: "stopped" } : current);
+    let stopMessage = "Automatic step scheduling paused. Any pending native preparation was cancelled; no active process was found.";
+    if (currentLoop && isTauriRuntime()) {
+      try {
+        const count = await cancelLoopProcesses(currentLoop.id);
+        stopMessage = count ? `Stop requested for ${count} native process(es). Partial evidence will be retained. Existing changes are not rolled back.` : stopMessage;
+      } catch {
+        stopMessage = "Scheduling paused, but native stop could not be confirmed. Check Native execution and retry.";
+      }
+    }
     setState((current) => ({
       ...current,
       loopSteps: current.loopSteps.map((step) => (step.status === "running" ? { ...step, status: "failed" } : step)),
@@ -1804,8 +1825,8 @@ export function App() {
           id: uid("AUD"),
           time: currentTime(),
           actor: "User",
-          action: "Loop stopped",
-          result: "Execution halted by manual stop condition.",
+          action: "Loop stop requested",
+          result: stopMessage,
         },
         ...current.audit,
       ],
@@ -2036,6 +2057,8 @@ export function App() {
             )}
           </div>
         </header>
+
+        <RuntimeActivity />
 
         {view === "home" && (
           <HomeView
@@ -5966,6 +5989,7 @@ function SettingsView({
           </label>
         </div>
       </Panel>
+      <BuildIdentityPanel />
       <Panel
         title="Quick Setup"
         icon={Gauge}
@@ -6583,15 +6607,16 @@ function SettingsView({
                   <strong>{displayValue(provider.compatibilityStatus)}</strong>
                 </div>
                 <div>
-                  <span>Auth</span>
+                  <span>Auth/config presence</span>
                   <strong>{displayValue(provider.authStatus)}</strong>
                 </div>
                 <div>
-                  <span>Read-only</span>
-                  <strong>{provider.readOnlyReady ? "ready" : "blocked"}</strong>
+                  <span>Safe profile prerequisites</span>
+                  <strong>{provider.readOnlyReady ? "declared" : "blocked"}</strong>
                 </div>
               </div>
             ) : null}
+            {provider.type === "cli" || provider.type === "api" ? <p className="helper-text">Setup checks inspect configuration and declared capabilities only. They do not verify a model response, account entitlement, or controlled writes.</p> : null}
             {provider.recoveryAction ? <p className="provider-recovery">Next: {provider.recoveryAction}</p> : null}
             {provider.lastContractCheckResult ? (
               <p className="helper-text">

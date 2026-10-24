@@ -16,3 +16,6 @@ serde_yaml = "0.9"
 tauri = { version = "2", features = [] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 time = { version = "0.3", features = ["formatting"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
