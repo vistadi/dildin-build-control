@@ -10,13 +10,21 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{sync::mpsc, thread};
 use tauri::Manager;
 
+mod build_info;
 mod harness;
+mod process_runner;
+mod provider_checks;
 
 #[derive(Serialize)]
 struct EnvironmentCheck {
     name: String,
     status: String,
     detail: String,
+}
+
+#[tauri::command]
+fn get_build_info() -> build_info::BuildInfo {
+    build_info::current()
 }
 
 #[derive(Serialize)]
@@ -133,6 +141,8 @@ struct CliContractCheckResult {
 
 #[derive(Deserialize)]
 struct CliRunRequest {
+    #[serde(default)]
+    scope: String,
     command: String,
     args: Vec<String>,
     prompt: String,
@@ -542,7 +552,19 @@ fn classify_command(command: String) -> String {
 }
 
 #[tauri::command]
-fn test_cli_provider(
+async fn test_cli_provider(
+    command: String,
+    version_args: Vec<String>,
+    args_template: String,
+) -> Result<CliHealthResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        test_cli_provider_sync(command, version_args, args_template)
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+fn test_cli_provider_sync(
     command: String,
     version_args: Vec<String>,
     args_template: String,
@@ -594,7 +616,7 @@ fn test_cli_provider(
         }
     };
 
-    match Command::new(&resolved_command).args(args).output() {
+    match process_runner::probe(Command::new(&resolved_command).args(args)) {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -728,6 +750,8 @@ fn probe_cli_compatibility(
             "--approval-mode",
             "--safe-mode",
             "--max-tool-calls",
+            "--max-session-turns",
+            "--max-wall-time",
         ],
         _ => &[],
     };
@@ -753,27 +777,23 @@ fn probe_cli_compatibility(
         );
     }
 
-    match Command::new(resolved_command).arg("--help").output() {
+    match process_runner::probe(Command::new(resolved_command).arg("--help")) {
         Ok(output) => {
             let help = String::from_utf8_lossy(&output.stdout).to_string()
                 + &String::from_utf8_lossy(&output.stderr);
-            let missing = required_flags
-                .iter()
-                .filter(|flag| !help.contains(**flag))
-                .copied()
-                .collect::<Vec<_>>();
+            let missing = provider_checks::missing_capabilities(provider_kind, &help);
             if output.status.success() && missing.is_empty() {
                 (
                     "supported".to_string(),
                     format!(
-                        "The installed {provider_kind} CLI exposes the required read-only headless contract."
+                        "The installed {provider_kind} CLI declares the required headless options. Setup check only; no model request or live fixture was run."
                     ),
                 )
             } else {
                 (
                     "capability_missing".to_string(),
                     format!(
-                        "The installed {provider_kind} CLI is missing required flags: {}.",
+                        "The installed {provider_kind} CLI does not declare required options/values: {}. Keep real execution disabled until this version is verified.",
                         missing.join(", ")
                     ),
                 )
@@ -1820,7 +1840,16 @@ fn wildcard_match(pattern: &str, value: &str) -> bool {
 }
 
 #[tauri::command]
-fn discover_cli(command: String, version_args: Vec<String>) -> Vec<CliCandidate> {
+async fn discover_cli(
+    command: String,
+    version_args: Vec<String>,
+) -> Result<Vec<CliCandidate>, String> {
+    tauri::async_runtime::spawn_blocking(move || discover_cli_sync(command, version_args))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn discover_cli_sync(command: String, version_args: Vec<String>) -> Vec<CliCandidate> {
     let name = command.trim();
     if name.is_empty() {
         return Vec::new();
@@ -1835,22 +1864,23 @@ fn discover_cli(command: String, version_args: Vec<String>) -> Vec<CliCandidate>
     discover_executables(name)
         .into_iter()
         .map(|(path, source)| {
-            let (status, version_output) = match Command::new(&path).args(args.iter()).output() {
-                Ok(output) => {
-                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    (
-                        if output.status.success() {
-                            "ok"
-                        } else {
-                            "warning"
-                        }
-                        .to_string(),
-                        trim_output(&(stdout + &stderr), 8000),
-                    )
-                }
-                Err(err) => ("failed".to_string(), err.to_string()),
-            };
+            let (status, version_output) =
+                match process_runner::probe(Command::new(&path).args(args.iter())) {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        (
+                            if output.status.success() {
+                                "ok"
+                            } else {
+                                "warning"
+                            }
+                            .to_string(),
+                            trim_output(&(stdout + &stderr), 8000),
+                        )
+                    }
+                    Err(err) => ("failed".to_string(), err.to_string()),
+                };
             CliCandidate {
                 path: path.display().to_string(),
                 source,
@@ -1862,7 +1892,15 @@ fn discover_cli(command: String, version_args: Vec<String>) -> Vec<CliCandidate>
 }
 
 #[tauri::command]
-fn check_cli_contract(request: CliContractCheckRequest) -> CliContractCheckResult {
+async fn check_cli_contract(
+    request: CliContractCheckRequest,
+) -> Result<CliContractCheckResult, String> {
+    tauri::async_runtime::spawn_blocking(move || check_cli_contract_sync(request))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn check_cli_contract_sync(request: CliContractCheckRequest) -> CliContractCheckResult {
     let mut diagnostics = Vec::new();
     let command = request.command.trim();
     let normalized_args_template = normalize_args_template(command, &request.args_template);
@@ -2010,7 +2048,28 @@ fn check_cli_contract(request: CliContractCheckRequest) -> CliContractCheckResul
 }
 
 #[tauri::command]
-fn run_cli_provider(request: CliRunRequest) -> CliRunResult {
+async fn run_cli_provider(request: CliRunRequest) -> Result<CliRunResult, String> {
+    tauri::async_runtime::spawn_blocking(move || execute_cli_provider(request))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn active_cli_processes() -> Vec<process_runner::Activity> {
+    process_runner::activities()
+}
+
+#[tauri::command]
+fn cancel_cli_process(id: String) -> bool {
+    process_runner::cancel(&id)
+}
+
+#[tauri::command]
+fn cancel_loop_processes(loop_id: String) -> usize {
+    process_runner::cancel_scope(&loop_id)
+}
+
+fn execute_cli_provider(request: CliRunRequest) -> CliRunResult {
     let started = Instant::now();
     let stream_provider_kind = provider_kind_from_command(&request.command).to_string();
     let command_preview = format!("{} {}", request.command, request.args.join(" "));
@@ -2117,101 +2176,46 @@ fn run_cli_provider(request: CliRunRequest) -> CliRunResult {
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    if request.prompt_mode == "stdin" {
-        command.stdin(Stdio::piped());
-    }
-
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(err) => {
-            return CliRunResult {
-                status: "not_available".to_string(),
-                stdout: String::new(),
-                stderr: err.to_string(),
-                exit_code: None,
-                duration_ms: started.elapsed().as_millis(),
-                decision: "allow".to_string(),
-                redacted_output: redact_text(&err.to_string()),
-                stream_report: empty_provider_stream_report(
-                    &stream_provider_kind,
-                    &err.to_string(),
-                ),
-            }
-        }
-    };
-
-    if request.prompt_mode == "stdin" {
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(request.prompt.as_bytes());
-        }
-    }
-
-    let timeout = Duration::from_secs(request.timeout_seconds.max(1));
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if started.elapsed() >= timeout {
-                    let _ = child.kill();
-                    return CliRunResult {
-                        status: "timeout".to_string(),
-                        stdout: String::new(),
-                        stderr: "Process timed out and was killed.".to_string(),
-                        exit_code: None,
-                        duration_ms: started.elapsed().as_millis(),
-                        decision: "allow".to_string(),
-                        redacted_output: "Process timed out and was killed.".to_string(),
-                        stream_report: empty_provider_stream_report(
-                            &stream_provider_kind,
-                            "Process timed out and was killed.",
-                        ),
-                    };
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(err) => {
-                return CliRunResult {
-                    status: "failed_exit_code".to_string(),
-                    stdout: String::new(),
-                    stderr: err.to_string(),
-                    exit_code: None,
-                    duration_ms: started.elapsed().as_millis(),
-                    decision: "allow".to_string(),
-                    redacted_output: redact_text(&err.to_string()),
-                    stream_report: empty_provider_stream_report(
-                        &stream_provider_kind,
-                        &err.to_string(),
-                    ),
-                };
-            }
-        }
-    }
-
-    match child.wait_with_output() {
+    let input = (request.prompt_mode == "stdin").then(|| request.prompt.into_bytes());
+    match process_runner::run(
+        &mut command,
+        input,
+        Duration::from_secs(request.timeout_seconds.max(1)),
+        request.max_output_bytes,
+        &request.scope,
+    ) {
         Ok(output) => {
-            let stdout = trim_output(
-                &String::from_utf8_lossy(&output.stdout),
-                request.max_output_bytes,
-            );
-            let stderr = trim_output(
-                &String::from_utf8_lossy(&output.stderr),
-                request.max_output_bytes,
-            );
+            let stdout = output.stdout;
+            let mut stderr = output.stderr;
+            let status = if output.reason == "timeout" {
+                "timeout"
+            } else if output.reason == "cancelled" {
+                "cancelled"
+            } else if output.truncated {
+                "output_limit"
+            } else if !output.io_errors.is_empty() || !output.status.success() {
+                "failed_exit_code"
+            } else {
+                "success"
+            };
+            if status != "success" {
+                stderr.push_str(&format!("\nDBC execution outcome: {status}. Partial output is not acceptance evidence.\n"));
+            }
+            for error in output.io_errors {
+                stderr.push_str(&format!("\n{error}"));
+            }
             let combined = format!("{stdout}\n{stderr}");
-            let stream_report = normalize_provider_stream(
+            let mut stream_report = normalize_provider_stream(
                 &stream_provider_kind,
                 &stdout,
                 &stderr,
                 output.status.code(),
             );
+            if status != "success" {
+                stream_report["outcome"] = serde_json::json!("failed");
+            }
             CliRunResult {
-                status: if output.status.success() {
-                    "success".to_string()
-                } else {
-                    "failed_exit_code".to_string()
-                },
+                status: status.to_string(),
                 stdout,
                 stderr,
                 exit_code: output.status.code(),
@@ -2222,7 +2226,12 @@ fn run_cli_provider(request: CliRunRequest) -> CliRunResult {
             }
         }
         Err(err) => CliRunResult {
-            status: "failed_exit_code".to_string(),
+            status: if err.kind() == std::io::ErrorKind::Interrupted {
+                "cancelled"
+            } else {
+                "not_available"
+            }
+            .to_string(),
             stdout: String::new(),
             stderr: err.to_string(),
             exit_code: None,
@@ -2480,7 +2489,16 @@ fn start_loop_run(
 }
 
 #[tauri::command]
-fn run_controlled_smoke_loop(
+async fn run_controlled_smoke_loop(
+    app: tauri::AppHandle,
+    request: ControlledSmokeLoopRequest,
+) -> Result<LoopRunSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || run_controlled_smoke_loop_sync(app, request))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn run_controlled_smoke_loop_sync(
     app: tauri::AppHandle,
     request: ControlledSmokeLoopRequest,
 ) -> Result<LoopRunSnapshot, String> {
@@ -2575,7 +2593,7 @@ fn run_controlled_smoke_loop(
         if snapshot.status != "running" {
             break;
         }
-        snapshot = advance_loop_run(app.clone(), snapshot.id.clone())?;
+        snapshot = advance_loop_run_sync(app.clone(), snapshot.id.clone())?;
     }
 
     Ok(snapshot)
@@ -2704,7 +2722,30 @@ fn controlled_smoke_step(
 }
 
 #[tauri::command]
-fn advance_loop_run(app: tauri::AppHandle, loop_id: String) -> Result<LoopRunSnapshot, String> {
+async fn advance_loop_run(
+    app: tauri::AppHandle,
+    loop_id: String,
+) -> Result<LoopRunSnapshot, String> {
+    // Register before queueing blocking work, so Stop also covers preparation.
+    let guard = process_runner::ScopeGuard::acquire(&loop_id)?;
+    tauri::async_runtime::spawn_blocking(move || advance_loop_run_guarded(app, loop_id, guard))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn advance_loop_run_sync(
+    app: tauri::AppHandle,
+    loop_id: String,
+) -> Result<LoopRunSnapshot, String> {
+    let guard = process_runner::ScopeGuard::acquire(&loop_id)?;
+    advance_loop_run_guarded(app, loop_id, guard)
+}
+
+fn advance_loop_run_guarded(
+    app: tauri::AppHandle,
+    loop_id: String,
+    _guard: process_runner::ScopeGuard,
+) -> Result<LoopRunSnapshot, String> {
     let db_path = database_path(&app)?;
     let conn = open_db(db_path)?;
     let mut run = read_loop_run(&conn, &loop_id)?;
@@ -2812,6 +2853,7 @@ fn advance_loop_run(app: tauri::AppHandle, loop_id: String) -> Result<LoopRunSna
 
 #[tauri::command]
 fn resume_loop_run(app: tauri::AppHandle, loop_id: String) -> Result<LoopRunSnapshot, String> {
+    let _guard = process_runner::ScopeGuard::acquire(&loop_id)?;
     let db_path = database_path(&app)?;
     let conn = open_db(db_path)?;
     let run = read_loop_run(&conn, &loop_id)?;
@@ -2830,6 +2872,7 @@ fn resume_loop_run(app: tauri::AppHandle, loop_id: String) -> Result<LoopRunSnap
 
 #[tauri::command]
 fn retry_loop_step(app: tauri::AppHandle, loop_id: String) -> Result<LoopRunSnapshot, String> {
+    let _guard = process_runner::ScopeGuard::acquire(&loop_id)?;
     let db_path = database_path(&app)?;
     let conn = open_db(db_path)?;
     let run = read_loop_run(&conn, &loop_id)?;
@@ -2850,6 +2893,7 @@ fn resolve_loop_approval(
     app: tauri::AppHandle,
     request: ResolveApprovalRequest,
 ) -> Result<LoopRunSnapshot, String> {
+    let _guard = process_runner::ScopeGuard::acquire(&request.loop_id)?;
     let db_path = database_path(&app)?;
     let conn = open_db(db_path)?;
     let run = read_loop_run(&conn, &request.loop_id)?;
@@ -7043,6 +7087,7 @@ fn execute_loop_step(run: &LoopRunRow, step: &LoopStepSnapshot) -> StepExecution
         parse_args_template(&args_template, &prompt, &run.project_path),
     );
     let request = CliRunRequest {
+        scope: run.id.clone(),
         command: step.provider_command.clone(),
         args,
         prompt: if prompt_mode == "arg" {
@@ -7060,7 +7105,7 @@ fn execute_loop_step(run: &LoopRunRow, step: &LoopStepSnapshot) -> StepExecution
             "review".to_string()
         },
     };
-    let result = run_cli_provider(request);
+    let result = execute_cli_provider(request);
     let report = report_from_cli_result(&result);
     StepExecution {
         status: status_from_report(&report),
@@ -7106,6 +7151,7 @@ fn execute_local_commands(run: &LoopRunRow, step: &LoopStepSnapshot) -> StepExec
             continue;
         }
         let request = CliRunRequest {
+            scope: run.id.clone(),
             command: parts[0].clone(),
             args: parts[1..].to_vec(),
             prompt: String::new(),
@@ -7115,7 +7161,7 @@ fn execute_local_commands(run: &LoopRunRow, step: &LoopStepSnapshot) -> StepExec
             max_output_bytes: step.max_output_bytes,
             policy_mode: "allow".to_string(),
         };
-        let result = run_cli_provider(request);
+        let result = execute_cli_provider(request);
         output.push_str(&format!(
             "\n## {command_line}\nStatus: {}\nExit: {:?}\n\n{}\n",
             result.status, result.exit_code, result.redacted_output
@@ -7745,10 +7791,7 @@ fn validate_codex_contract(
         });
     }
 
-    match Command::new(resolved_command)
-        .args(["exec", "--help"])
-        .output()
-    {
+    match process_runner::probe(Command::new(resolved_command).args(["exec", "--help"])) {
         Ok(output) => {
             let help = trim_output(
                 &(String::from_utf8_lossy(&output.stdout).to_string()
@@ -7814,7 +7857,7 @@ fn validate_claude_contract(
         });
     }
 
-    match Command::new(resolved_command).arg("--help").output() {
+    match process_runner::probe(Command::new(resolved_command).arg("--help")) {
         Ok(output) => {
             let help = trim_output(
                 &(String::from_utf8_lossy(&output.stdout).to_string()
@@ -7977,19 +8020,24 @@ fn validate_help_contract(
     required_flags: &[&str],
     diagnostics: &mut Vec<ProjectConfigDiagnostic>,
 ) {
-    match Command::new(resolved_command).arg("--help").output() {
+    match process_runner::probe(Command::new(resolved_command).arg("--help")) {
         Ok(output) => {
             let help = trim_output(
                 &(String::from_utf8_lossy(&output.stdout).to_string()
                     + &String::from_utf8_lossy(&output.stderr)),
                 12000,
             );
-            if output.status.success() && required_flags.iter().all(|flag| help.contains(flag)) {
+            let provider_kind = subject.strip_suffix("-contract").unwrap_or(subject);
+            let missing = provider_checks::missing_capabilities(provider_kind, &help);
+            if output.status.success()
+                && missing.is_empty()
+                && required_flags.iter().all(|flag| help.contains(flag))
+            {
                 diagnostics.push(ProjectConfigDiagnostic {
                     level: "ok".to_string(),
                     subject: subject.to_string(),
                     detail: format!(
-                        "Installed CLI exposes the required non-interactive flags: {}.",
+                        "Installed CLI declares the required non-interactive options: {}. Setup check only; no live model fixture was run.",
                         required_flags.join(", ")
                     ),
                 });
@@ -7998,8 +8046,8 @@ fn validate_help_contract(
                     level: "error".to_string(),
                     subject: subject.to_string(),
                     detail: format!(
-                        "Installed CLI help does not expose the expected flags: {}.",
-                        required_flags.join(", ")
+                        "Installed CLI help does not declare the expected contract: {}. No model request was sent.",
+                        if missing.is_empty() { required_flags.join(", ") } else { missing.join(", ") }
                     ),
                 });
             }
@@ -10216,7 +10264,16 @@ fn start_harness_run(
 }
 
 #[tauri::command]
-fn advance_harness_run(
+async fn advance_harness_run(
+    app: tauri::AppHandle,
+    harness_run_id: String,
+) -> Result<harness::HarnessRun, String> {
+    tauri::async_runtime::spawn_blocking(move || advance_harness_run_sync(app, harness_run_id))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn advance_harness_run_sync(
     app: tauri::AppHandle,
     harness_run_id: String,
 ) -> Result<harness::HarnessRun, String> {
@@ -10225,7 +10282,7 @@ fn advance_harness_run(
     if run.compatibility_loop_run_id.is_empty() {
         return Err("HarnessRun has no compatibility loop attached.".to_string());
     }
-    let snapshot = advance_loop_run(app, run.compatibility_loop_run_id.clone())?;
+    let snapshot = advance_loop_run_sync(app, run.compatibility_loop_run_id.clone())?;
     let active_state = snapshot
         .steps
         .get(snapshot.active_step_index.max(0) as usize)
@@ -10453,8 +10510,44 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn incomplete_cli_output_never_passes_acceptance() {
+        for (script, expected) in [
+            (
+                "printf '{\"verdict\":\"pass\"}'; head -c 4096 /dev/zero",
+                "output_limit",
+            ),
+            ("printf '{\"verdict\":\"pass\"}'; sleep 5", "timeout"),
+            (
+                "printf '{\"verdict\":\"pass\"}'; exit 7",
+                "failed_exit_code",
+            ),
+        ] {
+            let result = execute_cli_provider(CliRunRequest {
+                scope: String::new(),
+                command: "/bin/sh".into(),
+                args: vec!["-c".into(), script.into()],
+                prompt: String::new(),
+                cwd: String::new(),
+                prompt_mode: "arg".into(),
+                timeout_seconds: 1,
+                max_output_bytes: 256,
+                policy_mode: "allow".into(),
+            });
+            assert_eq!(result.status, expected);
+            assert!(result.stdout.contains("verdict"));
+            assert_eq!(result.stream_report["outcome"], "failed");
+            assert_eq!(
+                status_from_report(&report_from_cli_result(&result)),
+                "failed"
+            );
+        }
+    }
+
+    #[test]
     fn runtime_blocks_kimi_until_tool_policy_proxy_exists() {
-        let result = run_cli_provider(CliRunRequest {
+        let result = execute_cli_provider(CliRunRequest {
+            scope: String::new(),
             command: "/opt/homebrew/bin/kimi".to_string(),
             args: vec!["-p".to_string(), "review".to_string(), "--plan".to_string()],
             prompt: String::new(),
@@ -10470,7 +10563,8 @@ mod tests {
 
     #[test]
     fn runtime_blocks_qwen_without_zero_tool_budget() {
-        let result = run_cli_provider(CliRunRequest {
+        let result = execute_cli_provider(CliRunRequest {
+            scope: String::new(),
             command: "/opt/homebrew/bin/qwen".to_string(),
             args: vec![
                 "-p".to_string(),
@@ -10559,7 +10653,8 @@ mod tests {
 
     #[test]
     fn terminal_prompt_mode_requires_manual_execution_before_spawn() {
-        let result = run_cli_provider(CliRunRequest {
+        let result = execute_cli_provider(CliRunRequest {
+            scope: String::new(),
             command: "/bin/echo".to_string(),
             args: vec!["should-not-print".to_string()],
             prompt: "hello".to_string(),
@@ -11473,6 +11568,7 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             environment_check,
+            get_build_info,
             classify_command,
             discover_cli,
             check_cli_contract,
@@ -11482,6 +11578,9 @@ fn main() {
             record_mcp_approval,
             test_secret_ref,
             run_cli_provider,
+            active_cli_processes,
+            cancel_cli_process,
+            cancel_loop_processes,
             run_controlled_smoke_loop,
             start_loop_run,
             advance_loop_run,

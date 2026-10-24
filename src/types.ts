@@ -493,6 +493,8 @@ export interface ProviderRunResult {
     | "blocked_by_policy"
     | "approval_required"
     | "timeout"
+    | "cancelled"
+    | "output_limit"
     | "not_available";
   stdout: string;
   stderr: string;

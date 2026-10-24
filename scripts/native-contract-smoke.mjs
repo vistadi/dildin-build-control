@@ -11,6 +11,10 @@ const commands = [
   "test_secret_ref",
   "generate_evidence_pack",
   "accept_or_rework_harness_result",
+  "get_build_info",
+  "active_cli_processes",
+  "cancel_cli_process",
+  "cancel_loop_processes",
 ];
 const checks = [
   ...commands.map((command) => [main.includes(command), `native command registered: ${command}`]),
@@ -19,6 +23,8 @@ const checks = [
   [config.bundle?.active === true, "desktop bundling is enabled"],
   [Array.isArray(config.bundle?.targets) || config.bundle?.targets === "all", "desktop bundle targets are declared"],
   [config.app?.security?.csp !== null, "desktop Content Security Policy is explicit"],
+  [main.includes("process_runner::run") && main.includes("spawn_blocking"), "native execution uses bounded off-main-thread runner"],
+  [main.includes('"output_limit"') && main.includes('stream_report["outcome"]'), "incomplete output cannot report successful evidence"],
 ];
 
 let failed = false;

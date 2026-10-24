@@ -147,6 +147,7 @@ export function providerContractDiagnostics(provider: Provider) {
     warnings.push("Kimi print mode auto-approves internal tool calls; keep MCP/tool access disabled until the DBC policy proxy is active.");
   }
   if (isQwenCommand(provider.command)) {
+    warnings.push("Setup checks do not verify model access. Safe mode disables customizations, not OS access; zero tool calls does not remove tool schemas.");
     if (/\s(?:--yolo|-y)(?:\s|$)|--approval-mode\s+yolo/.test(provider.argsTemplate)) {
       warnings.push("Unsafe Qwen auto-approval arguments were normalized to approval mode `plan`.");
     }

@@ -29,8 +29,31 @@
   and tool-budget flags through a capability probe; do not claim a hard minimum yet.
 - Owner: provider integration maintainer.
 - Status: open.
+- Research update (2026-10-11): the official 2026-09-10 Qwen update describes Plan
+  as separate from permission mode, while the current approval/headless references
+  still document `--approval-mode plan`. DBC's template, argument normalizer, and
+  backend gate require that value. Resolve the discrepancy with a pinned installed
+  CLI fixture; neither a confirmed incompatibility nor a safe replacement is proven.
+  See `worklog/2026-10-11-current-ecosystem-improvements.md` for sources and acceptance
+  criteria. Kimi/Qwen were not found on this session's PATH; no model call was made.
+- Implementation update (2026-10-24): bounded help/version probes now require the
+  turn/time/tool limits and declared plan/stream-json option values. Official October
+  references still document plan. Synthetic fixtures pass, but a pinned installed-CLI
+  fixture is still required; this question remains open.
 
 ## Resolved
+
+### 2026-10-24 — How should PR #16 CodeQL alert #6 be resolved?
+
+- Resolution date: 2026-10-24.
+- Result: maintainer approved removing raw stderr from the test assertion, commits
+  and push, then merge only after green CI/CodeQL. Keep all behavior assertions and
+  CodeQL coverage; no alert dismissal or bypass. The edit and local formatting/51
+  Rust tests passed; remote verification and merge remain pending at this checkpoint.
+- Affected modules: `src-tauri/src/main.rs` test diagnostic and PR #16.
+- Owner: project maintainer.
+- Status: resolution approach approved; execution tracked in the worklog.
+- Evidence: `worklog/2026-10-24-pr-16-review-and-ci.md`.
 
 ### 2026-07-28 — Which design partners represent the first target segment?
 

@@ -519,3 +519,40 @@ release worklog.
 The alpha.2 artifacts must be described as unsigned and not notarized. Future signing
 support should use a separately verified signed-release workflow or explicit conditional
 jobs rather than injecting empty signing variables into the unsigned path.
+
+## 2026-10-24 — Bounded execution and honest operator diagnostics
+
+Status: accepted
+
+### Context
+
+The user authorized review, planning and implementation of current improvements.
+The October source review identified exit-before-drain CLI handling and missing
+operator visibility into the running binary/process. Provider help checks alone
+cannot establish live-model support or account entitlement.
+
+### Decision
+
+Use concurrent bounded CLI capture, timeout/cancellation with owned Unix process
+groups, partial-output failure semantics and per-loop operation locks. Expose build
+identity and metadata-only activity in English using existing Dibi tokens. Keep Kimi
+blocked and Qwen plan/safe/zero-tool constraints unchanged; strengthen setup checks
+without representing them as live certification. Do not infer signing from compilation.
+
+### Rationale
+
+Reliability and clear evidence improve daily operation without expanding provider
+authority, adding a second design system, or requiring paid validation calls.
+
+### Affected modules
+
+Native CLI execution and probes, loop commands, build metadata, provider contracts,
+Settings, process activity, smoke/regression fixtures, release build-label environment.
+
+### Consequences
+
+Output limits, I/O errors, cancellation and timeout cannot produce passing acceptance.
+Cancellation does not roll back writes or sandbox a provider; process-group guarantees
+are Unix-specific. Packaged native UI validation, pinned live-provider fixtures and
+signing remain separate checkpoints. Git commits/pushes require explicit approval of
+the proposed inventory; no merge, release or installation is included in this decision.

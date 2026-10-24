@@ -2144,6 +2144,28 @@ pre {
   gap: 8px;
 }
 
+.diagnostics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 12px;
+}
+
+.diagnostics-grid > div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-2);
+}
+
+.diagnostics-grid dt { color: var(--muted); font-size: 12px; font-weight: 700; }
+.diagnostics-grid dd { margin: 6px 0 0; overflow-wrap: anywhere; font-size: 13px; }
+.runtime-activity { margin-bottom: 18px; }
+.process-activity-list { list-style: none; padding: 0; margin: 12px 0; }
+.process-activity-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.process-activity-list li > div { min-width: 0; flex: 1 1 220px; overflow-wrap: anywhere; }
+.process-activity-list button { min-width: 140px; flex-shrink: 0; }
+
 .provider-readiness > div {
   min-width: 0;
   padding: 9px;
