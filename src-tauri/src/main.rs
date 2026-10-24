@@ -10534,7 +10534,7 @@ mod tests {
                 max_output_bytes: 256,
                 policy_mode: "allow".into(),
             });
-            assert_eq!(result.status, expected, "{}", result.stderr);
+            assert_eq!(result.status, expected);
             assert!(result.stdout.contains("verdict"));
             assert_eq!(result.stream_report["outcome"], "failed");
             assert_eq!(
