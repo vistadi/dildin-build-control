@@ -556,3 +556,46 @@ Cancellation does not roll back writes or sandbox a provider; process-group guar
 are Unix-specific. Packaged native UI validation, pinned live-provider fixtures and
 signing remain separate checkpoints. Git commits/pushes require explicit approval of
 the proposed inventory; no merge, release or installation is included in this decision.
+
+## 2026-10-24 — Persist lifecycle without automatic replay
+
+Status: accepted
+
+### Context
+
+After approving PR #16 remediation, publication and green-check merge, the maintainer
+requested Stop/Resume. Frontend-only pause cannot establish durable state; the previous
+Resume reset a step without enforcing its attempt limit.
+
+### Decision
+
+Persist stopping/stopped/interrupted, claim/count attempts before execution, retain
+late results without clearing Stop, and separate queued-work Resume from explicit
+Retry of interrupted/failed work. Preserve evidence and approval/attempt boundaries.
+Recover unfinished runs without launching providers. Coordinate this version's
+instances with an exclusive SQLite runtime lease before startup recovery.
+
+### Rationale
+
+Operators must know whether execution settled and whether continuing repeats side
+effects. Startup recovery must not race another cooperating runtime.
+
+### Affected modules
+
+Rust loop lifecycle, process metadata, harness synchronization, Tauri startup/bridge,
+English lifecycle controls, browser fallback, tests, CI and operator documentation.
+
+### Consequences
+
+No rollback or exactly-once external-effect guarantee. Retrying an interrupted
+multi-command step can repeat earlier commands; inspect crash-surviving/escaped
+processes. Close older versions: they do not honor the lease or lifecycle semantics.
+Stop/Resume remains local pending publication approval. This extends rather than
+rewrites the earlier bounded-execution decision; no release or installation.
+
+### Publication follow-up — 2026-10-24
+
+The maintainer subsequently approved the two proposed implementation/memory commits,
+push and a new PR, explicitly without merge or release. Runtime commit `5110d0a` is
+published in PR #18. This changes publication authority only; the lifecycle decision,
+compatibility warnings and outstanding native-window verification remain unchanged.

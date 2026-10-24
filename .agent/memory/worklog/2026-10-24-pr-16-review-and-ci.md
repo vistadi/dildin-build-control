@@ -123,3 +123,28 @@ or publishing an unrequested release.
 - Next: publish both commits, verify exact-head CI and aggregate CodeQL, recheck PR
   identity/review state, merge with expected head protection, then begin Stop/Resume.
   Remote success and merge are not claimed by this pre-publication checkpoint.
+
+## Publication and merge completed
+
+- Created/pushed `8358e638052652615faef2d76c30569754e359ca` —
+  `test(runtime): avoid raw stderr in assertion diagnostics`.
+- Created/pushed `ea402f1f4f53cb02965c496435615408f262d261` —
+  `docs(memory): record PR 16 review and CI resolution`.
+- Reviewed staged groups, whitespace and credential patterns (no matches).
+  Tree clean after publication; no unrelated/generated files included.
+- Exact-head CI `40123421084` and CodeQL `40123421116` passed. Both analyses,
+  frontend, Rust and aggregate CodeQL (`120959885871`) succeeded. The interim
+  neutral/missing-Rust result was superseded by success/no new alerts. Frontend's
+  annotation was an Ubuntu runner-image migration notice.
+- Rechecked head `ea402f1`, base `d688407`, clean mergeability and no blocking
+  reviews. The security-bot thread was outdated and displayed Fixed in the UI.
+- Connector merge with expected head returned 403. Used the already authorized
+  signed-in browser without permission expansion or alert dismissal. UI displayed
+  Merged / 5 checks passed; API confirmed `3b21f7446caca6fb216f395c0f4a3be542b307cc`,
+  merged at `2026-10-24T19:08:09Z`.
+- Screenshot: `/private/tmp/dbc-pr16-merge-YKNIrt/merged.png` (outside Git).
+- Fetched main, fast-forwarded local main and started clean
+  `codex/durable-stop-resume`. No branch deletion, release or installation.
+- At the implementation handoff this post-merge memory update was uncommitted with
+  Stop/Resume. The maintainer subsequently approved its inclusion in the second
+  memory commit for PR #18. PR #16 checkpoints and merge are already in Git history.

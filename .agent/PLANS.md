@@ -1,21 +1,44 @@
 # DBC Active Plans
 
+## 2026-10-24 — Durable Stop/Resume
+
+Status: implemented and locally verified on `codex/durable-stop-resume`, based on
+merged PR #16 (`3b21f74`). Runtime commit `5110d0a` is pushed in open
+[PR #18](https://github.com/vistadi/dildin-build-control/pull/18). The maintainer
+approved both implementation and memory commits, push and this new PR, explicitly
+excluding merge and release. This checkpoint records publication; final-head
+CI/CodeQL and review remain required. See `memory/worklog/2026-10-24-durable-stop-resume.md` for
+inventory, 60 Rust tests, frontend/native builds, browser QA and remaining native-window
+verification. No live provider, release or installation was performed.
+
+1. Persist stopping/stopped/interrupted states; serialize transitions and distinguish
+   queued work from an executing attempt. Never auto-replay work after interruption.
+2. Confirm Stop only after the active operation releases ownership; preserve partial
+   evidence and retry budgets. Resume must not bypass approvals or retry a failed step.
+3. Restore interrupted state on startup under a single-runtime database lease; keep
+   crash recovery honest about external processes and lack of rollback.
+4. Add English Resume/Retry/pending/error UI using existing Dibi components/tokens.
+5. Verify native state/race/recovery fixtures, frontend behavior, builds and smoke
+   checks; update memory and publish the two explicitly approved commit groups.
+
 ## 2026-10-24 — Reliable native execution and build diagnostics
 
-Status: implemented, locally verified and published in open
+Status: implemented, verified and merged via
 [PR #16](https://github.com/vistadi/dildin-build-control/pull/16) from
 `codex/native-execution-diagnostics` into `main`. Runtime `c4b4287` and memory
 `c8fe6dd` are pushed. The maintainer signed in and browser PR creation succeeded
-after the connector's HTTP 403. No integration permissions were expanded; no merge
-or release was performed. Publication checkpoint `4090ff3` is also pushed. Review
+after the connector's HTTP 403. No integration permissions were expanded; at PR
+creation no merge or release was performed. Publication checkpoint `4090ff3` is also pushed. Review
 on 2026-10-24 confirmed passing CI and completed CodeQL analysis, but the aggregate
 CodeQL check failed on alert #6 in a test assertion. Static triage found a count-only,
 empty-prompt test path, not a secret-value disclosure. The maintainer authorized
 merge only if checks/review are good. The maintainer subsequently approved the narrow
 test diagnostic fix, commits, push and merge after green exact-head checks, followed
 by Stop/Resume implementation. The assertion no longer prints raw stderr; all 51 Rust
-tests and formatting pass locally. Remote CI/CodeQL for the new head is still pending.
-No alert dismissal, check bypass or merge has been performed at this checkpoint.
+tests and formatting passed locally before the new remote checks started.
+This pre-publication checkpoint was followed by commits `8358e63` and `ea402f1`.
+All five exact-head checks passed (aggregate CodeQL: no new alerts), and PR #16
+merged as `3b21f74` on 2026-10-24. No alert dismissal, check bypass or release.
 User requested current review, a plan, implementation, and GitHub publication.
 Preserve the existing October research changes. The original implementation scope
 excluded merge/release; this review adds conditional merge only, not release.
