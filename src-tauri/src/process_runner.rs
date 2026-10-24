@@ -73,10 +73,10 @@ struct Active {
 #[serde(rename_all = "camelCase")]
 pub struct Activity {
     pub id: String,
-    scope: String,
+    pub scope: String,
     label: String,
     elapsed_ms: u128,
-    stdout_bytes: u64,
+    pub stdout_bytes: u64,
     stderr_bytes: u64,
     cancel_requested: bool,
 }

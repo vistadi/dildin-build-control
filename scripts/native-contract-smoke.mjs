@@ -15,6 +15,7 @@ const commands = [
   "active_cli_processes",
   "cancel_cli_process",
   "cancel_loop_processes",
+  "stop_loop_run",
 ];
 const checks = [
   ...commands.map((command) => [main.includes(command), `native command registered: ${command}`]),

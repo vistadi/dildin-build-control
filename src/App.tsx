@@ -31,6 +31,8 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { BuildIdentityPanel, RuntimeActivity } from "./components/RuntimeDiagnostics";
+import { LoopLifecycleControls } from "./components/LoopLifecycleControls";
+import { recoverLoopApproval } from "./loopLifecycle";
 import { normalizeProviderConfig, parseArgsTemplate as parseCliArgsTemplate, providerContractDiagnostics } from "./cliContracts";
 import { loopTemplate, providerPresets } from "./data";
 import { mergeVerifiedModelCatalog, validateApiProvider } from "./apiAdapters";
@@ -51,7 +53,8 @@ import {
   freezeTaskContract,
   checkCliContract,
   classifyCommand,
-  cancelLoopProcesses,
+  stopBackendLoop,
+  resumeBackendLoop,
   discoverCli,
   generateEvidencePack,
   generateRealMicroRunbookReport,
@@ -173,6 +176,10 @@ export function App() {
   const [running, setRunning] = useState(false);
   const [activeStep, setActiveStep] = useState(0);
   const [currentLoop, setCurrentLoop] = useState<LoopRunSnapshot | null>(null);
+  const [loopAction, setLoopAction] = useState<"stop" | "resume" | "retry" | null>(null);
+  const [loopActionError, setLoopActionError] = useState("");
+  const loopActionRef = useRef<"stop" | "resume" | "retry" | null>(null);
+  const loopGenerationRef = useRef(0);
   const [evidenceBundle, setEvidenceBundle] = useState<LoopEvidenceBundle | null>(null);
   const [loopStateMachine, setLoopStateMachine] = useState<LoopStateMachineReport | null>(null);
   const [runJournal, setRunJournal] = useState<RunJournalReport | null>(null);
@@ -203,12 +210,14 @@ export function App() {
 
   useEffect(() => {
     if (!running || !currentLoop) return;
+    const generation = loopGenerationRef.current;
     let disposed = false;
     const timer = window.setTimeout(async () => {
       try {
       const previousActive = currentLoop.steps[currentLoop.activeStepIndex];
       const nextLoop = await advanceBackendLoop(currentLoop.id, currentLoop);
       if (disposed) return;
+      if (generation !== loopGenerationRef.current) return;
       const executedStep = nextLoop.steps[currentLoop.activeStepIndex] ?? previousActive;
       const stopped = nextLoop.status !== "running" && nextLoop.status !== "completed";
       const approvalId = executedStep?.status === "approval_required" ? `APP-${nextLoop.id}-${executedStep.id}` : "";
@@ -291,7 +300,7 @@ export function App() {
         setRunning(false);
       }
       } catch (error) {
-        if (!disposed) {
+        if (!disposed && generation === loopGenerationRef.current) {
           setRunning(false);
           recordHarnessError("Loop execution failed", error);
         }
@@ -302,9 +311,12 @@ export function App() {
   }, [running, currentLoop]);
 
   const activeProject = state.projects.find((project) => project.id === state.activeProjectId) ?? state.projects[0];
-  const activeHarnessRun = currentHarnessRun(harnessOverview);
+  const activeHarnessRun = currentLoop
+    ? harnessOverview.runs.find(run => run.compatibilityLoopRunId === currentLoop.id)
+    : currentHarnessRun(harnessOverview);
   const pendingApprovals = state.approvals.filter(
-    (approval) => approval.status === "pending" && approvalMatchesRun(approval, activeHarnessRun),
+    (approval) => approval.status === "pending" &&
+      ((!!currentLoop && approval.loopId === currentLoop.id) || approvalMatchesRun(approval, activeHarnessRun)),
   );
   const totalCost = state.costs.reduce((sum, event) => sum + event.amount, 0);
 
@@ -950,6 +962,9 @@ export function App() {
   }
 
   async function openLoopRun(summary: LoopRunSummary) {
+    if (loopActionRef.current) return;
+    loopGenerationRef.current += 1;
+    setLoopActionError("");
     try {
       let loop: LoopRunSnapshot;
       try {
@@ -963,6 +978,7 @@ export function App() {
       setState((current) => ({
         ...current,
         loopSteps: loop.steps,
+        approvals: recoverLoopApproval(loop, current.approvals),
         audit: [
           {
             id: uid("AUD"),
@@ -1802,60 +1818,64 @@ export function App() {
   }
 
   async function stopLoop() {
+    if (!currentLoop || loopActionRef.current) return;
+    const target = currentLoop;
+    loopActionRef.current = "stop";
+    setLoopAction("stop");
+    setLoopActionError("");
+    loopGenerationRef.current += 1;
     setRunning(false);
-    // Retain the loop for explicit Resume; native evidence is reconciled on resume.
-    setCurrentLoop(current => current ? { ...current, status: "stopped" } : current);
-    let stopMessage = "Automatic step scheduling paused. Any pending native preparation was cancelled; no active process was found.";
-    if (currentLoop && isTauriRuntime()) {
-      try {
-        const count = await cancelLoopProcesses(currentLoop.id);
-        stopMessage = count ? `Stop requested for ${count} native process(es). Partial evidence will be retained. Existing changes are not rolled back.` : stopMessage;
-      } catch {
-        stopMessage = "Scheduling paused, but native stop could not be confirmed. Check Native execution and retry.";
-      }
+    setCurrentLoop({ ...target, status: "stopping" });
+    try {
+      const stopped = await stopBackendLoop(target.id, target);
+      setCurrentLoop(stopped);
+      setActiveStep(stopped.activeStepIndex);
+      setState(current => ({ ...current, loopSteps: stopped.steps,
+        approvals: recoverLoopApproval(stopped, current.approvals), audit: [{
+        id: uid("AUD"), time: currentTime(), actor: "User", action: "Loop stop settled",
+        result: `${stopped.id}: ${stopped.status}. Partial evidence retained. Changes are not rolled back.`,
+      }, ...current.audit] }));
+      await refreshHarnessOverview(target.projectPath);
+      await refreshLoopHistory();
+    } catch (error) {
+      setLoopActionError(`Stop could not be confirmed. Resume and Retry remain disabled. ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      loopActionRef.current = null;
+      setLoopAction(null);
     }
-    setState((current) => ({
-      ...current,
-      loopSteps: current.loopSteps.map((step) => (step.status === "running" ? { ...step, status: "failed" } : step)),
-      projects: current.projects.map((project) =>
-        project.id === current.activeProjectId ? { ...project, latestLoop: "stopped", risk: "medium" } : project,
-      ),
-      audit: [
-        {
-          id: uid("AUD"),
-          time: currentTime(),
-          actor: "User",
-          action: "Loop stop requested",
-          result: stopMessage,
-        },
-        ...current.audit,
-      ],
-    }));
   }
 
-  async function retryLoop() {
-    if (!currentLoop) return;
+  async function continueLoop(retry: boolean) {
+    if (!currentLoop || loopActionRef.current) return;
+    if (retry && !window.confirm("Retry starts a new attempt and may repeat side effects. Inspect workspace changes, partial evidence and external processes first. Retry this step?")) return;
+    const action = retry ? "retry" : "resume";
+    loopActionRef.current = action;
+    setLoopAction(action);
+    setLoopActionError("");
+    loopGenerationRef.current += 1;
     try {
-      const resumed = await retryBackendLoop(currentLoop.id, currentLoop);
+      const resumed = await (retry ? retryBackendLoop : resumeBackendLoop)(currentLoop.id, currentLoop);
       setCurrentLoop(resumed);
       setActiveStep(resumed.activeStepIndex);
-      setRunning(true);
+      setRunning(resumed.status === "running");
       setState((current) => ({
         ...current,
         loopSteps: resumed.steps,
-        tasks: current.tasks.map((task) => (task.id === currentLoop.taskId ? { ...task, status: "running" } : task)),
+        tasks: current.tasks.map((task) => (task.id === resumed.taskId ? { ...task, status: resumed.status === "completed" ? "done" : "running" } : task)),
         audit: [
           {
             id: uid("AUD"),
             time: currentTime(),
             actor: "Loop Engine",
-            action: "Loop retry started",
-            result: `${resumed.id} retrying ${resumed.steps[resumed.activeStepIndex]?.state ?? "current step"}.`,
+            action: retry ? "Loop retry started" : "Loop resumed",
+            result: `${resumed.id}: ${resumed.status}; ${resumed.steps[resumed.activeStepIndex]?.state ?? "current step"}.`,
           },
           ...current.audit,
         ],
       }));
+      await refreshHarnessOverview(resumed.projectPath);
     } catch (error) {
+      setLoopActionError(error instanceof Error ? error.message : String(error));
       setState((current) => ({
         ...current,
         audit: [
@@ -1863,12 +1883,15 @@ export function App() {
             id: uid("AUD"),
             time: currentTime(),
             actor: "Loop Engine",
-            action: "Loop retry failed",
+            action: retry ? "Loop retry failed" : "Loop resume failed",
             result: error instanceof Error ? error.message : String(error),
           },
           ...current.audit,
         ],
       }));
+    } finally {
+      loopActionRef.current = null;
+      setLoopAction(null);
     }
   }
 
@@ -1888,6 +1911,7 @@ export function App() {
       }
     }
     if (approval?.loopId && approval.stepId && currentLoop?.id === approval.loopId && status !== "pending") {
+      if (loopActionRef.current) return;
       try {
         resolvedLoop = await resolveBackendLoopApproval({
           loopId: approval.loopId,
@@ -1900,6 +1924,9 @@ export function App() {
         setRunning(resolvedLoop.status === "running");
       } catch (error) {
         resolveError = error instanceof Error ? error.message : String(error);
+        setLoopActionError(resolveError);
+        recordHarnessError("Loop approval failed", error);
+        return; // Never display an approval as accepted when the backend rejected it.
       }
     }
 
@@ -2040,12 +2067,12 @@ export function App() {
             ) : null}
           </div>
           <div className="topbar-actions">
-            <button className="ghost-btn" onClick={resetDemo}>
+            <button className="ghost-btn" onClick={resetDemo} disabled={running || !!loopAction || currentLoop?.status === "stopping"}>
               <RotateCcw size={16} />
               Reset demo
             </button>
             {running ? (
-              <button className="danger-btn" onClick={stopLoop}>
+              <button className="danger-btn" onClick={stopLoop} disabled={!!loopAction}>
                 <Square size={16} />
                 Stop loop
               </button>
@@ -2059,6 +2086,8 @@ export function App() {
         </header>
 
         <RuntimeActivity />
+        {currentLoop ? <LoopLifecycleControls run={currentLoop} busy={loopAction} error={loopActionError}
+          onStop={stopLoop} onResume={() => continueLoop(false)} onRetry={() => continueLoop(true)} /> : null}
 
         {view === "home" && (
           <HomeView
@@ -2191,7 +2220,6 @@ export function App() {
             loopStateMachine={loopStateMachine}
             runJournal={runJournal}
             evidenceLoading={evidenceLoading}
-            onRetry={retryLoop}
             onRefresh={refreshLoopHistory}
             onRefreshEvidence={() => refreshEvidenceBundle()}
             onRefreshStateMachine={() => refreshLoopStateMachine()}
@@ -2205,6 +2233,7 @@ export function App() {
         {view === "approvals" && (
           <ApprovalsView
             approvals={state.approvals}
+            currentLoop={currentLoop}
             approvalQueue={approvalQueue}
             harnessOverview={harnessOverview}
             updateApproval={updateApproval}
@@ -4300,7 +4329,6 @@ function LoopsView({
   loopStateMachine,
   runJournal,
   evidenceLoading,
-  onRetry,
   onRefresh,
   onRefreshEvidence,
   onRefreshStateMachine,
@@ -4320,7 +4348,6 @@ function LoopsView({
   loopStateMachine: LoopStateMachineReport | null;
   runJournal: RunJournalReport | null;
   evidenceLoading: boolean;
-  onRetry: () => void;
   onRefresh: () => void;
   onRefreshEvidence: () => void;
   onRefreshStateMachine: () => void;
@@ -4330,11 +4357,8 @@ function LoopsView({
   onAdvanceHarness: (run: HarnessRun) => void;
   onGenerateEvidencePack: (run: HarnessRun) => void;
 }) {
-  const canResume = currentLoop && !running && ["blocked", "failed", "stopped"].includes(currentLoop.status);
   const activeLoopStep = currentLoop?.steps[currentLoop.activeStepIndex];
   const executionStep = activeLoopStep ?? steps[activeStep] ?? steps[0];
-  const attemptsUsed = activeLoopStep?.attemptCount ?? 0;
-  const maxAttempts = activeLoopStep?.maxAttempts ?? 3;
   const latestHarnessRun = harnessOverview.runs[0];
   const loopDecision = latestHarnessRun
     ? displayValue(latestHarnessRun.status)
@@ -4645,12 +4669,6 @@ function LoopsView({
             <span className={running ? "status-pill live" : `status-pill ${currentLoop?.status ?? ""}`}>
               {running ? `Step ${activeStep + 1}` : currentLoop?.status ?? "Idle"}
             </span>
-            {canResume ? (
-              <button className="primary-btn" onClick={onRetry} disabled={attemptsUsed >= maxAttempts}>
-                <RotateCcw size={16} />
-                Retry
-              </button>
-            ) : null}
           </div>
         }
       >
@@ -4971,29 +4989,35 @@ function gatePriority(level: "ok" | "warning" | "error") {
 
 function ApprovalsView({
   approvals,
+  currentLoop,
   approvalQueue,
   harnessOverview,
   updateApproval,
   onRefreshApprovalQueue,
 }: {
   approvals: ApprovalRequest[];
+  currentLoop: LoopRunSnapshot | null;
   approvalQueue: ApprovalQueueReport | null;
   harnessOverview: HarnessOverview;
   updateApproval: (id: string, status: ApprovalRequest["status"]) => void;
   onRefreshApprovalQueue: () => void;
 }) {
-  const activeRun = currentHarnessRun(harnessOverview);
+  const activeRun = currentLoop
+    ? harnessOverview.runs.find(run => run.compatibilityLoopRunId === currentLoop.id)
+    : currentHarnessRun(harnessOverview);
+  const selectedRunId = currentLoop?.id ?? activeRun?.id;
   const scopedOverview = overviewForRun(harnessOverview, activeRun);
   const harnessGates = buildHarnessApprovalGates(scopedOverview);
-  const currentApprovals = approvals.filter((approval) => approvalMatchesRun(approval, activeRun));
+  const currentApprovals = approvals.filter((approval) =>
+    (!!currentLoop && approval.loopId === currentLoop.id) || approvalMatchesRun(approval, activeRun));
   const pendingLocal = currentApprovals.filter((approval) => approval.status === "pending");
   const currentQueueItems = activeRun ? (approvalQueue?.items ?? []).filter((item) => valueMatchesRun(item, activeRun)) : [];
   const requiredQueueItems = currentQueueItems.filter((item) => item.required && item.status !== "not_required");
   const pendingQueueItems = requiredQueueItems.filter((item) => item.status === "pending" || item.status === "blocked");
   const blockerCount = pendingQueueItems.filter((item) => item.status === "blocked").length;
   const pendingCount = pendingLocal.length + pendingQueueItems.length;
-  const approvalStatus = !activeRun ? "waiting" : blockerCount ? "blocked" : pendingCount ? "waiting" : "ready";
-  const nextAction = !activeRun
+  const approvalStatus = !selectedRunId ? "waiting" : blockerCount ? "blocked" : pendingCount ? "waiting" : "ready";
+  const nextAction = !selectedRunId
     ? "Start one bounded Run. Approvals will appear only when they are linked to it."
     : blockerCount
       ? "Resolve the blocked gate before this run can continue."
@@ -5003,8 +5027,8 @@ function ApprovalsView({
   return (
     <section className="view-stack">
       <OperatorHint
-        step={activeRun ? `Current run · ${activeRun.id}` : "Approvals"}
-        title={!activeRun ? "No current run selected" : pendingCount ? "A human decision is required" : "No approvals block this run"}
+        step={selectedRunId ? `Current run · ${selectedRunId}` : "Approvals"}
+        title={!selectedRunId ? "No current run selected" : pendingCount ? "A human decision is required" : "No approvals block this run"}
         detail="DBC shows only approvals linked to the current run. Provider setup gates and historical records stay in technical details."
         status={approvalStatus}
       />
@@ -5020,7 +5044,7 @@ function ApprovalsView({
       >
         <DecisionStrip
           items={[
-            { label: "Run", value: activeRun?.taskId ?? "not started", tone: activeRun ? "ok" : "warning" },
+            { label: "Run", value: currentLoop?.taskId ?? activeRun?.taskId ?? "not started", tone: selectedRunId ? "ok" : "warning" },
             { label: "Needed now", value: String(pendingCount), tone: blockerCount ? "failed" : pendingCount ? "warning" : "ok" },
             { label: "Real execution", value: requiredQueueItems.length ? "approval required" : "not requested", tone: requiredQueueItems.length ? "warning" : "ok" },
             { label: "Status", value: displayValue(approvalStatus), tone: blockerCount ? "failed" : pendingCount ? "warning" : "ok" },

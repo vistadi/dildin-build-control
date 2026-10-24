@@ -119,7 +119,7 @@ export interface LoopStep {
   lastError?: string;
   summary: string;
   evidence: string;
-  status: "waiting" | "running" | "passed" | "blocked" | "failed" | "approval_required";
+  status: "waiting" | "running" | "executing" | "interrupted" | "passed" | "blocked" | "failed" | "approval_required";
   output?: string;
   artifactPath?: string;
   evidencePath?: string;
@@ -574,7 +574,7 @@ export interface LoopRunSnapshot {
   taskSpecChecksum: string;
   memoryContext: string;
   memoryRefs: string[];
-  status: "running" | "completed" | "failed" | "stopped" | "blocked";
+  status: "running" | "completed" | "failed" | "stopping" | "stopped" | "interrupted" | "blocked";
   activeStepIndex: number;
   artifactDir: string;
   manifestPath: string;

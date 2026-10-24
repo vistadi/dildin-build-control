@@ -164,6 +164,7 @@ Pre-release macOS packages are published under [GitHub Releases](https://github.
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Stop, Resume, Retry and crash recovery](docs/STOP_RESUME.md)
 - [Loop Engineering Manifesto](docs/LOOP_ENGINEERING_MANIFESTO.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Positioning and target users](docs/POSITIONING.md)

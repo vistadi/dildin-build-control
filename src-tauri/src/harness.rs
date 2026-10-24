@@ -627,16 +627,18 @@ pub fn update_harness_from_loop(
     let mut run = read_harness_run(conn, harness_run_id)?;
     match loop_status {
         "completed" => {
+            run.last_error.clear();
             run.status = "evidence_ready".to_string();
             run.current_stage = "evidence_ready".to_string();
             run.completed_at = unix_millis();
         }
-        "failed" | "blocked" | "stopped" => {
+        "failed" | "blocked" | "stopping" | "stopped" | "interrupted" => {
             run.status = "blocked".to_string();
             run.current_stage = "blocked".to_string();
             run.last_error = format!("Compatibility loop stopped with status {loop_status}.");
         }
         _ => {
+            run.last_error.clear();
             let mapped = map_loop_state_to_harness_status(active_state);
             run.status = mapped.to_string();
             run.current_stage = mapped.to_string();
@@ -2016,6 +2018,14 @@ mod tests {
         let reviewed = update_harness_from_loop(&conn, &run.id, "running", "reviewing").unwrap();
         assert_eq!(reviewed.status, "reviewed");
         assert_eq!(read_slice(&conn, &slice.id).unwrap().status, "reviewed");
+
+        for status in ["stopping", "stopped", "interrupted"] {
+            let blocked = update_harness_from_loop(&conn, &run.id, status, "reviewing").unwrap();
+            assert_eq!(blocked.status, "blocked");
+            assert!(!blocked.last_error.is_empty());
+        }
+        let resumed = update_harness_from_loop(&conn, &run.id, "running", "reviewing").unwrap();
+        assert!(resumed.last_error.is_empty());
 
         let ready = update_harness_from_loop(&conn, &run.id, "completed", "acceptance").unwrap();
         assert_eq!(ready.status, "evidence_ready");

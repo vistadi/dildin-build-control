@@ -12,6 +12,7 @@ use tauri::Manager;
 
 mod build_info;
 mod harness;
+mod loop_lifecycle;
 mod process_runner;
 mod provider_checks;
 
@@ -2069,6 +2070,29 @@ fn cancel_loop_processes(loop_id: String) -> usize {
     process_runner::cancel_scope(&loop_id)
 }
 
+#[tauri::command]
+async fn stop_loop_run(app: tauri::AppHandle, loop_id: String) -> Result<LoopRunSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_db(database_path(&app)?)?;
+        loop_lifecycle::request_stop(&conn, &loop_id)?;
+        process_runner::cancel_scope(&loop_id);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(_guard) = process_runner::ScopeGuard::acquire(&loop_id) {
+                loop_lifecycle::finish_stop(&conn, &loop_id)?;
+                let snapshot = build_loop_snapshot(&conn, read_loop_run(&conn, &loop_id)?)?;
+                persist_loop_outputs(&snapshot)?;
+                sync_loop_harnesses(&conn, &snapshot)?;
+                return Ok(snapshot);
+            }
+            if Instant::now() >= deadline {
+                return Err("Stop is still pending. No Resume or Retry is allowed until execution settles; use Stop again to confirm.".into());
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+    }).await.map_err(|e| e.to_string())?
+}
+
 fn execute_cli_provider(request: CliRunRequest) -> CliRunResult {
     let started = Instant::now();
     let stream_provider_kind = provider_kind_from_command(&request.command).to_string();
@@ -2744,20 +2768,35 @@ fn advance_loop_run_sync(
 fn advance_loop_run_guarded(
     app: tauri::AppHandle,
     loop_id: String,
-    _guard: process_runner::ScopeGuard,
+    guard: process_runner::ScopeGuard,
 ) -> Result<LoopRunSnapshot, String> {
     let db_path = database_path(&app)?;
     let conn = open_db(db_path)?;
-    let mut run = read_loop_run(&conn, &loop_id)?;
+    advance_loop_in_db(&conn, loop_id, guard)
+}
+
+fn advance_loop_in_db(
+    conn: &Connection,
+    loop_id: String,
+    _guard: process_runner::ScopeGuard,
+) -> Result<LoopRunSnapshot, String> {
+    let run = read_loop_run(&conn, &loop_id)?;
 
     if run.status != "running" {
-        return get_loop_run(app, loop_id);
+        return build_loop_snapshot(conn, run);
     }
 
     let active = run.active_step_index;
     let current_step = read_loop_step(&conn, &loop_id, active)?;
-    let execution = budget_guard_execution(&conn, &run, &current_step)?
-        .unwrap_or_else(|| execute_loop_step(&run, &current_step));
+    let budget_result = budget_guard_execution(&conn, &run, &current_step)?;
+    if !loop_lifecycle::claim_step(&conn, &loop_id, active)? {
+        let current = read_loop_run(conn, &loop_id)?;
+        if current.status == "running" {
+            return Err("Step is not queued or its attempt limit is exhausted. Stop and inspect this run before continuing.".into());
+        }
+        return build_loop_snapshot(conn, current);
+    }
+    let execution = budget_result.unwrap_or_else(|| execute_loop_step(&run, &current_step));
     let output = execution.output;
     let structured_report_json =
         serde_json::to_string_pretty(&execution.report).map_err(|err| err.to_string())?;
@@ -2789,65 +2828,24 @@ fn advance_loop_run_guarded(
         0
     };
 
-    conn.execute(
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|err| err.to_string())?;
+    tx.execute(
         "update loop_steps
          set status = ?1, output = ?2, structured_report_json = ?3, artifact_path = ?4, evidence_path = ?5, finished_at = datetime('now'),
-             attempt_count = attempt_count + 1, requires_approval = ?6, last_error = ?7
+             requires_approval = ?6, last_error = ?7
          where loop_id = ?8 and step_index = ?9",
         params![execution.status, output, structured_report_json, artifact_path, evidence_path, requires_approval, last_error, loop_id, active],
     )
         .map_err(|err| err.to_string())?;
 
-    if execution.status != "passed" {
-        conn.execute(
-            "update loop_runs set status = ?1, updated_at = datetime('now') where id = ?2",
-            params![
-                if execution.status == "approval_required" {
-                    "blocked"
-                } else {
-                    "failed"
-                },
-                loop_id
-            ],
-        )
-        .map_err(|err| err.to_string())?;
-        run = read_loop_run(&conn, &loop_id)?;
-        let snapshot = build_loop_snapshot(&conn, run)?;
-        persist_loop_outputs(&snapshot)?;
-        return Ok(snapshot);
-    }
-
-    let step_count: i64 = conn
-        .query_row(
-            "select count(*) from loop_steps where loop_id = ?1",
-            params![loop_id],
-            |row| row.get(0),
-        )
-        .map_err(|err| err.to_string())?;
-
-    if active + 1 >= step_count {
-        conn.execute(
-            "update loop_runs set status = 'completed', active_step_index = ?1, updated_at = datetime('now'), completed_at = datetime('now') where id = ?2",
-            params![active, loop_id],
-        )
-        .map_err(|err| err.to_string())?;
-    } else {
-        let next = active + 1;
-        conn.execute(
-            "update loop_steps set status = 'running', started_at = datetime('now') where loop_id = ?1 and step_index = ?2",
-            params![loop_id, next],
-        )
-        .map_err(|err| err.to_string())?;
-        conn.execute(
-            "update loop_runs set active_step_index = ?1, updated_at = datetime('now') where id = ?2",
-            params![next, loop_id],
-        )
-        .map_err(|err| err.to_string())?;
-    }
-
-    run = read_loop_run(&conn, &loop_id)?;
+    loop_lifecycle::finish_step(&tx, &loop_id, active, &execution.status)?;
+    tx.commit().map_err(|err| err.to_string())?;
+    let run = read_loop_run(&conn, &loop_id)?;
     let snapshot = build_loop_snapshot(&conn, run)?;
     persist_loop_outputs(&snapshot)?;
+    sync_loop_harnesses(&conn, &snapshot)?;
     Ok(snapshot)
 }
 
@@ -2855,18 +2853,13 @@ fn advance_loop_run_guarded(
 fn resume_loop_run(app: tauri::AppHandle, loop_id: String) -> Result<LoopRunSnapshot, String> {
     let _guard = process_runner::ScopeGuard::acquire(&loop_id)?;
     let db_path = database_path(&app)?;
-    let conn = open_db(db_path)?;
-    let run = read_loop_run(&conn, &loop_id)?;
-
-    if run.status == "completed" {
-        return build_loop_snapshot(&conn, run);
-    }
-
-    prepare_step_retry(&conn, &run, false)?;
+    let mut conn = open_db(db_path)?;
+    loop_lifecycle::continue_run(&mut conn, &loop_id, false)?;
 
     let resumed = read_loop_run(&conn, &loop_id)?;
     let snapshot = build_loop_snapshot(&conn, resumed)?;
     persist_loop_outputs(&snapshot)?;
+    sync_loop_harnesses(&conn, &snapshot)?;
     Ok(snapshot)
 }
 
@@ -2874,17 +2867,12 @@ fn resume_loop_run(app: tauri::AppHandle, loop_id: String) -> Result<LoopRunSnap
 fn retry_loop_step(app: tauri::AppHandle, loop_id: String) -> Result<LoopRunSnapshot, String> {
     let _guard = process_runner::ScopeGuard::acquire(&loop_id)?;
     let db_path = database_path(&app)?;
-    let conn = open_db(db_path)?;
-    let run = read_loop_run(&conn, &loop_id)?;
-
-    if run.status == "completed" {
-        return build_loop_snapshot(&conn, run);
-    }
-
-    prepare_step_retry(&conn, &run, true)?;
+    let mut conn = open_db(db_path)?;
+    loop_lifecycle::continue_run(&mut conn, &loop_id, true)?;
     let retried = read_loop_run(&conn, &loop_id)?;
     let snapshot = build_loop_snapshot(&conn, retried)?;
     persist_loop_outputs(&snapshot)?;
+    sync_loop_harnesses(&conn, &snapshot)?;
     Ok(snapshot)
 }
 
@@ -2895,9 +2883,22 @@ fn resolve_loop_approval(
 ) -> Result<LoopRunSnapshot, String> {
     let _guard = process_runner::ScopeGuard::acquire(&request.loop_id)?;
     let db_path = database_path(&app)?;
-    let conn = open_db(db_path)?;
+    let mut db = open_db(db_path)?;
+    let conn = db
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
     let run = read_loop_run(&conn, &request.loop_id)?;
     let step = read_loop_step(&conn, &request.loop_id, run.active_step_index)?;
+
+    if run.status == "stopping" {
+        return Err("Wait for Stop to finish before resolving an approval.".into());
+    }
+    if !step.requires_approval || step.status != "approval_required" {
+        return Err("This step has no pending approval.".into());
+    }
+    if request.action == "approved" && step.attempt_count >= step.max_attempts {
+        return Err("Step attempt limit reached; approval cannot reset its budget.".into());
+    }
 
     if step.id != request.step_id {
         return Err(format!(
@@ -2955,7 +2956,9 @@ fn resolve_loop_approval(
 
     let resolved = read_loop_run(&conn, &request.loop_id)?;
     let snapshot = build_loop_snapshot(&conn, resolved)?;
+    conn.commit().map_err(|e| e.to_string())?;
     persist_loop_outputs(&snapshot)?;
+    sync_loop_harnesses(&db, &snapshot)?;
     Ok(snapshot)
 }
 
@@ -5944,6 +5947,25 @@ fn loop_ops_evidence_snapshot(snapshot: &LoopRunSnapshot) -> serde_json::Value {
     })
 }
 
+fn sync_loop_harnesses(conn: &Connection, snapshot: &LoopRunSnapshot) -> Result<(), String> {
+    let ids = conn
+        .prepare("select id from harness_runs where compatibility_loop_run_id = ?1")
+        .map_err(|e| e.to_string())?
+        .query_map([&snapshot.id], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    let state = snapshot
+        .steps
+        .get(snapshot.active_step_index.max(0) as usize)
+        .map(|step| step.state.as_str())
+        .unwrap_or(&snapshot.status);
+    for id in ids {
+        harness::update_harness_from_loop(conn, &id, &snapshot.status, state)?;
+    }
+    Ok(())
+}
+
 fn persist_loop_outputs(snapshot: &LoopRunSnapshot) -> Result<(), String> {
     ensure_git_baseline(snapshot)?;
     write_git_workspace_package(snapshot)?;
@@ -6764,37 +6786,6 @@ fn empty_as_missing(value: &str) -> &str {
     }
 }
 
-fn prepare_step_retry(
-    conn: &Connection,
-    run: &LoopRunRow,
-    enforce_attempt_limit: bool,
-) -> Result<(), String> {
-    let step = read_loop_step(conn, &run.id, run.active_step_index)?;
-    if enforce_attempt_limit && step.attempt_count >= step.max_attempts {
-        return Err(format!(
-            "Step {} already used {}/{} attempts.",
-            step.id, step.attempt_count, step.max_attempts
-        ));
-    }
-
-    conn.execute(
-        "update loop_steps
-         set status = 'running', requires_approval = 0, last_error = '', output = '', structured_report_json = '', artifact_path = '', evidence_path = '',
-             started_at = datetime('now'), finished_at = ''
-         where loop_id = ?1 and step_index = ?2",
-        params![run.id, run.active_step_index],
-    )
-    .map_err(|err| err.to_string())?;
-
-    conn.execute(
-        "update loop_runs set status = 'running', updated_at = datetime('now'), completed_at = null where id = ?1",
-        params![run.id],
-    )
-    .map_err(|err| err.to_string())?;
-
-    Ok(())
-}
-
 fn write_step_artifact(
     run: &LoopRunRow,
     loop_id: &str,
@@ -6806,6 +6797,7 @@ fn write_step_artifact(
     let dir = PathBuf::from(&run.artifact_dir);
     fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
     let path = dir.join(format!("{:02}-{}.md", artifact_order(&step.state), step.id));
+    archive_previous_attempt(&path, step.attempt_count)?;
     let content = format!(
         "# Loop Step Artifact\n\nLoop: {loop_id}\nTask: {} - {}\nTask Spec: {}#{}\nMemory Refs: {}\nStep: {}\nState: {}\nAgent: {}\nRole: {}\nProvider: {}\nStatus: {}\n\n## Structured Report\n\n```json\n{}\n```\n\n## Summary\n{}\n\n## Evidence\n{}\n\n## Output\n{}\n",
         run.task_id,
@@ -6847,6 +6839,7 @@ fn write_step_evidence(
         artifact_order(&step.state),
         step.id
     ));
+    archive_previous_attempt(&path, step.attempt_count)?;
     let git = collect_git_evidence(&run.project_path);
     let scope_gate = scope_gate_from_git(&run.task_spec_path, &git);
     let content = serde_json::to_string_pretty(&serde_json::json!({
@@ -6882,6 +6875,22 @@ fn write_step_evidence(
     .map_err(|err| err.to_string())?;
     fs::write(&path, content).map_err(|err| err.to_string())?;
     Ok(path.display().to_string())
+}
+
+fn archive_previous_attempt(path: &Path, attempt: i64) -> Result<(), String> {
+    if attempt > 0 && path.is_file() {
+        let archive = path
+            .parent()
+            .ok_or("Artifact parent missing")?
+            .join("attempts")
+            .join(format!("attempt-{attempt}"));
+        fs::create_dir_all(&archive).map_err(|e| e.to_string())?;
+        let destination = archive.join(path.file_name().ok_or("Artifact name missing")?);
+        if !destination.exists() {
+            fs::copy(path, destination).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 fn collect_git_evidence(project_path: &str) -> serde_json::Value {
@@ -10018,8 +10027,23 @@ fn database_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("dbc.sqlite"))
 }
 
+fn acquire_runtime_lease(path: &Path) -> Result<Connection, String> {
+    let lease = Connection::open(path.with_file_name("dbc-runtime-lock.sqlite"))
+        .map_err(|e| e.to_string())?;
+    lease
+        .busy_timeout(Duration::ZERO)
+        .map_err(|e| e.to_string())?;
+    lease.execute_batch("begin exclusive;").map_err(|_| {
+        "Another DBC instance owns this runtime. Close it before starting another instance."
+            .to_string()
+    })?;
+    Ok(lease)
+}
+
 fn open_db(path: PathBuf) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|err| err.to_string())?;
+    conn.busy_timeout(Duration::from_secs(5))
+        .map_err(|err| err.to_string())?;
     conn.execute_batch(
         "
         create table if not exists workspaces (
@@ -10282,13 +10306,10 @@ fn advance_harness_run_sync(
     if run.compatibility_loop_run_id.is_empty() {
         return Err("HarnessRun has no compatibility loop attached.".to_string());
     }
-    let snapshot = advance_loop_run_sync(app, run.compatibility_loop_run_id.clone())?;
-    let active_state = snapshot
-        .steps
-        .get(snapshot.active_step_index.max(0) as usize)
-        .map(|step| step.state.clone())
-        .unwrap_or_else(|| snapshot.status.clone());
-    harness::update_harness_from_loop(&conn, &harness_run_id, &snapshot.status, &active_state)
+    advance_loop_run_sync(app, run.compatibility_loop_run_id.clone())?;
+    // The loop owner synchronizes the harness before releasing its operation guard.
+    // Do not overwrite a newer Stop with a stale completion snapshot here.
+    harness::read_harness_run(&conn, &harness_run_id)
 }
 
 #[tauri::command]
@@ -10423,6 +10444,89 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn runtime_lease_excludes_a_second_instance_and_releases_on_drop() {
+        let dir = temp_project_dir();
+        let path = dir.join("dbc.sqlite");
+        let lease = acquire_runtime_lease(&path).unwrap();
+        assert!(acquire_runtime_lease(&path).is_err());
+        drop(lease);
+        assert!(acquire_runtime_lease(&path).is_ok());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn durable_stop_cancels_real_process_preserves_evidence_and_recovers() {
+        let dir = temp_project_dir();
+        let path = dir.join("dbc.sqlite");
+        let mut conn = open_db(path.clone()).unwrap();
+        let id = format!(
+            "stop-fixture-{}",
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let artifacts = dir.join(".dbc/artifacts").join(&id);
+        conn.execute("insert into loop_runs (id, project_id, task_id, project_path, status, active_step_index, artifact_dir, created_at, updated_at, task_budget_limit)
+            values (?1, 'project', 'TASK', ?2, 'running', 0, ?3, '', '', 1)", params![id, dir.display().to_string(), artifacts.display().to_string()]).unwrap();
+        conn.execute("insert into loop_steps (loop_id, step_index, step_id, state, agent, role_id, provider_id, provider_type, provider_command, provider_args_template, provider_run_mode, agent_mode, timeout_seconds, max_attempts, summary, evidence, status)
+            values (?1, 0, 'build', 'implementation', 'fixture', 'builder', 'fixture', 'cli', '/bin/sh', ?2, 'real', 'write_workspace', 40, 3, '', '', 'running')", params![id, "-c 'printf partial; sleep 30'"]).unwrap();
+        let worker_path = path.clone();
+        let worker_id = id.clone();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let db = open_db(worker_path).unwrap();
+            let guard = process_runner::ScopeGuard::acquire(&worker_id).unwrap();
+            ready_tx.send(()).unwrap();
+            advance_loop_in_db(&db, worker_id, guard)
+        });
+        ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !process_runner::activities()
+            .iter()
+            .any(|a| a.scope == id && a.stdout_bytes > 0)
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        loop_lifecycle::request_stop(&conn, &id).unwrap();
+        let cancelled = process_runner::cancel_scope(&id);
+        let stopped = worker.join().unwrap().unwrap();
+        assert_eq!(cancelled, 1);
+        assert_eq!(stopped.status, "stopping");
+        assert_ne!(stopped.steps[0].status, "passed");
+        assert!(stopped.steps[0].output.contains("partial"));
+        let guard = process_runner::ScopeGuard::acquire(&id).unwrap();
+        assert!(!process_runner::activities().iter().any(|a| a.scope == id));
+        loop_lifecycle::finish_stop(&conn, &id).unwrap();
+        drop(guard);
+        drop(conn);
+        conn = open_db(path).unwrap();
+        assert_eq!(read_loop_run(&conn, &id).unwrap().status, "stopped");
+        assert!(loop_lifecycle::continue_run(&mut conn, &id, false).is_err());
+        loop_lifecycle::continue_run(&mut conn, &id, true).unwrap();
+        // Recovery does not invoke the provider or refund its previous attempt.
+        loop_lifecycle::recover_interrupted(&conn).unwrap();
+        assert_eq!(read_loop_run(&conn, &id).unwrap().status, "interrupted");
+        assert_eq!(read_loop_step(&conn, &id, 0).unwrap().attempt_count, 1);
+        assert!(Path::new(&stopped.steps[0].evidence_path).is_file());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn retry_archives_prior_evidence_without_overwriting_history() {
+        let dir = temp_project_dir();
+        let path = dir.join("result.json");
+        fs::write(&path, "partial evidence").unwrap();
+        archive_previous_attempt(&path, 1).unwrap();
+        fs::write(&path, "new result").unwrap();
+        archive_previous_attempt(&path, 1).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.join("attempts/attempt-1/result.json")).unwrap(),
+            "partial evidence"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn real_provider_call_limit_uses_four_calls_per_budget_unit() {
@@ -11566,6 +11670,25 @@ mod tests {
 
 fn main() {
     tauri::Builder::default()
+        .setup(|app| {
+            let path = database_path(app.handle()).map_err(std::io::Error::other)?;
+            // A separate SQLite lock DB prevents another app instance from recovering
+            // or executing this runtime's loops. The OS releases the lease on exit.
+            let lease = acquire_runtime_lease(&path).map_err(std::io::Error::other)?;
+            app.manage(std::sync::Mutex::new(lease));
+            let conn = open_db(path).map_err(std::io::Error::other)?;
+            for id in loop_lifecycle::recover_interrupted(&conn).map_err(std::io::Error::other)? {
+                let snapshot = build_loop_snapshot(
+                    &conn,
+                    read_loop_run(&conn, &id).map_err(std::io::Error::other)?,
+                )
+                .map_err(std::io::Error::other)?;
+                // A disconnected project must not prevent startup. SQLite is canonical.
+                let _ = write_loop_manifest(&snapshot);
+                let _ = sync_loop_harnesses(&conn, &snapshot);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             environment_check,
             get_build_info,
@@ -11581,6 +11704,7 @@ fn main() {
             active_cli_processes,
             cancel_cli_process,
             cancel_loop_processes,
+            stop_loop_run,
             run_controlled_smoke_loop,
             start_loop_run,
             advance_loop_run,
