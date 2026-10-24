@@ -86,12 +86,13 @@ installation, live-provider fixture or native-window end-to-end QA was performed
 
 ## Distribution state
 
-- The 2026-10-24 runtime improvement commit `c4b4287` is published on the feature
-  branch `codex/native-execution-diagnostics`, not merged to `main`. The maintainer
-  explicitly approved the implementation and memory commits, push and PR. PR creation
-  through the connector returned HTTP 403 (resource not accessible by integration);
-  the browser alternative requires the maintainer to sign in. No PR number is claimed,
-  no access permissions were changed, and no new release was published.
+- The 2026-10-24 runtime commit `c4b4287` and memory commit `c8fe6dd` are pushed to
+  `codex/native-execution-diagnostics` in open
+  [PR #16](https://github.com/vistadi/dildin-build-control/pull/16) targeting `main`.
+  GitHub API verification confirmed head `c8fe6dd`, two commits, 25 files and
+  `merged: false` at creation. The maintainer signed in and browser submission
+  succeeded after the connector's HTTP 403; no integration permissions were expanded.
+  CI was queued, not verified passing. Main remains `d688407`; no release was published.
 - Release metadata is aligned at `0.2.0`. Tag `v0.2.0-alpha.1` points to release commit
   `8f12f95`; its complete quality gate passed, but both macOS packaging jobs failed
   before a GitHub Release was created. The non-destructive follow-up
@@ -162,7 +163,7 @@ installation, live-provider fixture or native-window end-to-end QA was performed
 
 Next priorities after the approved 2026-10-24 implementation milestone:
 
-1. Complete the approved PR after browser sign-in, review it, then validate native UI
+1. Review PR #16 and its CI results, then validate native UI
    stop/resume and pinned Kimi/Qwen contracts;
    keep existing blocked/zero-tool profiles until replacement safeguards are verified.
 2. Prototype one interactive agent integration (Kimi ACP or Codex app-server) with

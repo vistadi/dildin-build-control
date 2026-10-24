@@ -2,14 +2,17 @@
 
 ## 2026-10-24 — Reliable native execution and build diagnostics
 
-Status: implemented and locally verified; runtime commit `c4b4287` is pushed to
-`codex/native-execution-diagnostics`. Both commits, push and PR were explicitly
-approved on 2026-10-24. PR creation is blocked by the connector's HTTP 403 and a
-signed-out browser session; no integration permissions were expanded.
+Status: implemented, locally verified and published in open
+[PR #16](https://github.com/vistadi/dildin-build-control/pull/16) from
+`codex/native-execution-diagnostics` into `main`. Runtime `c4b4287` and memory
+`c8fe6dd` are pushed. The maintainer signed in and browser PR creation succeeded
+after the connector's HTTP 403. No integration permissions were expanded; no merge
+or release was performed. GitHub CI was queued at PR creation, not yet certified.
 User requested current review, a plan, implementation, and GitHub publication.
 Preserve the existing October research changes; no main-branch merge or release is
 included. See `memory/worklog/2026-10-24-native-execution-and-diagnostics.md` for
-verification, remaining limitations and the approved two-commit inventory.
+verification, remaining limitations, the approved implementation/memory inventory,
+and the separately approved documentation-only publication checkpoint.
 
 1. Extract a bounded process runner: concurrent pipe draining, input delivery,
    timeout/cancellation, process reaping, partial evidence, and deterministic fixtures.

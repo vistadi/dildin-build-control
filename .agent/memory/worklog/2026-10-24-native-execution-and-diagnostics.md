@@ -117,7 +117,7 @@ Commit 1: `c4b4287225d218a423eb1de58fa0919931b1f410` —
 - `tests/runtime-diagnostics.tsx` (new)
 
 Commit 2: `docs(memory): record execution hardening and verification`
-(the documentation checkpoint containing this record).
+(`c8fe6dd3b585bc6fd57edbd5534bf6b1b6bba2a0`, committed and pushed).
 
 - `.agent/PLANS.md` (preserves prior research changes)
 - `.agent/memory/PROJECT_STATE.md` (preserves prior research; superseded finding updated)
@@ -168,12 +168,28 @@ decomposition and remote MCP/ACP integrations remain future work.
   "Resource not accessible by integration". No PR was created by that call. Opened
   the branch's PR form in the browser; it redirected to GitHub sign-in. Requested
   manual sign-in without inspecting credentials or expanding integration permissions.
-- The six explicitly listed memory files form the second approved checkpoint. Its
-  identity is the enclosing Git commit; final remote synchronization is checked after
-  push. No third checkpoint, amend, main merge, release or application install is
-  authorized by this follow-up.
-- Remaining action: after sign-in, create the approved PR from the published branch
-  into `main`, attach it to this chat and verify its head SHA. If sign-in is unavailable,
-  use https://github.com/vistadi/dildin-build-control/compare/main...codex/native-execution-diagnostics?expand=1
-  to complete the PR manually. Signing/live-provider/native-window verification remain
-  separately scoped next actions.
+- Created and pushed the six-file memory checkpoint `c8fe6dd`. Read-only remote
+  verification confirmed feature head `c8fe6dd3b585bc6fd57edbd5534bf6b1b6bba2a0`
+  and unchanged `main` at `d688407ef52e0180720c3e1760b015059ae36131`. The working
+  tree was clean after the two approved commits; no generated artifacts were included.
+- The maintainer then confirmed browser sign-in. Created
+  https://github.com/vistadi/dildin-build-control/pull/16 through the signed-in UI,
+  attached it to this chat, and independently checked the GitHub API: open, unmerged,
+  base `main`, head `c8fe6dd`, two commits and 25 changed files. Four CI/CodeQL checks
+  were queued at creation; this is not a passing-CI claim. The PR body includes all
+  test caveats and the explicit no-merge/no-release boundary.
+- PR screenshot: `/private/tmp/dbc-diagnostics-qa-ODogKR/github-pr-16.png` (outside Git).
+- The post-creation memory correction touches only PLANS, PROJECT_STATE and this
+  worklog. The maintainer explicitly approved the additional checkpoint
+  `docs(memory): record pull request 16 publication` and push to the same feature
+  branch. This follow-up started with exactly those three modified, unstaged files
+  and no unrelated changes. A fresh read-only remote check confirmed feature head
+  `c8fe6dd` and unchanged `main` at `d688407`. Neither published commit is to be
+  amended; merge and release remain outside the approved scope.
+- Publication-checkpoint validation: reviewed the three-file documentation diff;
+  `git diff --check` passed and a targeted credential-pattern scan of all three
+  files found zero matches. Runtime tests were not repeated for this docs-only
+  correction; their earlier executed results remain recorded above.
+- Next actions: review PR/CI, then separately scoped signing/live-provider/native-window
+  verification. The sign-in blocker is resolved; the connector permission limitation
+  remains but did not prevent publication through the approved browser session.
