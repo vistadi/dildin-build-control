@@ -43,6 +43,18 @@
 
 ## Resolved
 
+### 2026-10-24 — How should PR #16 CodeQL alert #6 be resolved?
+
+- Resolution date: 2026-10-24.
+- Result: maintainer approved removing raw stderr from the test assertion, commits
+  and push, then merge only after green CI/CodeQL. Keep all behavior assertions and
+  CodeQL coverage; no alert dismissal or bypass. The edit and local formatting/51
+  Rust tests passed; remote verification and merge remain pending at this checkpoint.
+- Affected modules: `src-tauri/src/main.rs` test diagnostic and PR #16.
+- Owner: project maintainer.
+- Status: resolution approach approved; execution tracked in the worklog.
+- Evidence: `worklog/2026-10-24-pr-16-review-and-ci.md`.
+
 ### 2026-07-28 — Which design partners represent the first target segment?
 
 - Resolution date: 2026-08-31.

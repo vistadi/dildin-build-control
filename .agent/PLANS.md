@@ -7,12 +7,22 @@ Status: implemented, locally verified and published in open
 `codex/native-execution-diagnostics` into `main`. Runtime `c4b4287` and memory
 `c8fe6dd` are pushed. The maintainer signed in and browser PR creation succeeded
 after the connector's HTTP 403. No integration permissions were expanded; no merge
-or release was performed. GitHub CI was queued at PR creation, not yet certified.
+or release was performed. Publication checkpoint `4090ff3` is also pushed. Review
+on 2026-10-24 confirmed passing CI and completed CodeQL analysis, but the aggregate
+CodeQL check failed on alert #6 in a test assertion. Static triage found a count-only,
+empty-prompt test path, not a secret-value disclosure. The maintainer authorized
+merge only if checks/review are good. The maintainer subsequently approved the narrow
+test diagnostic fix, commits, push and merge after green exact-head checks, followed
+by Stop/Resume implementation. The assertion no longer prints raw stderr; all 51 Rust
+tests and formatting pass locally. Remote CI/CodeQL for the new head is still pending.
+No alert dismissal, check bypass or merge has been performed at this checkpoint.
 User requested current review, a plan, implementation, and GitHub publication.
-Preserve the existing October research changes; no main-branch merge or release is
-included. See `memory/worklog/2026-10-24-native-execution-and-diagnostics.md` for
+Preserve the existing October research changes. The original implementation scope
+excluded merge/release; this review adds conditional merge only, not release.
+See `memory/worklog/2026-10-24-native-execution-and-diagnostics.md` for
 verification, remaining limitations, the approved implementation/memory inventory,
 and the separately approved documentation-only publication checkpoint.
+Review evidence: `memory/worklog/2026-10-24-pr-16-review-and-ci.md`.
 
 1. Extract a bounded process runner: concurrent pipe draining, input delivery,
    timeout/cancellation, process reaping, partial evidence, and deterministic fixtures.

@@ -92,7 +92,18 @@ installation, live-provider fixture or native-window end-to-end QA was performed
   GitHub API verification confirmed head `c8fe6dd`, two commits, 25 files and
   `merged: false` at creation. The maintainer signed in and browser submission
   succeeded after the connector's HTTP 403; no integration permissions were expanded.
-  CI was queued, not verified passing. Main remains `d688407`; no release was published.
+  Publication checkpoint `4090ff3` is also pushed. On 2026-10-24, CI run
+  `40118002186` passed on that head (51 Rust tests, frontend/contracts/performance
+  and five EvidencePack gates). CodeQL workflow `40118002168` completed successfully,
+  but aggregate check `120943469449` failed on High alert #6,
+  `rust/cleartext-logging`, at `src-tauri/src/main.rs:10537`. Static triage found the
+  reported path non-actionable: count-only diagnostics, a test-only assertion and
+  an empty fixed prompt; this is not a dynamic security validation. The alert remains
+  open at review and no bypass/dismissal was made. The maintainer then approved removal
+  of raw stderr from the assertion diagnostic, commits/push and merge after green
+  exact-head CI. This test-only change preserves status/output/acceptance assertions;
+  formatting and all 51 Rust tests pass locally. New-head remote checks are pending;
+  no merge has occurred at this checkpoint. Main remains `d688407`; no release was published.
 - Release metadata is aligned at `0.2.0`. Tag `v0.2.0-alpha.1` points to release commit
   `8f12f95`; its complete quality gate passed, but both macOS packaging jobs failed
   before a GitHub Release was created. The non-destructive follow-up
