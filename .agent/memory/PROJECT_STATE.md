@@ -7,30 +7,22 @@ passed at `af986ad`, with no new CodeQL alerts and no review threads. Release
 Release quality (60 Rust tests), both macOS packaging jobs, CI and CodeQL passed.
 All six downloaded assets match published sizes/digests; both manifests and DMG
 integrity checks passed. Static inspection confirmed architecture, alpha.4 label
-and full release SHA in both binaries. No alpha.4 application was launched or installed.
-PR #18 previously merged into `main` as
-`66dcf66`, including PR #16 and durable Stop/Resume. Unsigned macOS prerelease
-`v0.2.0-alpha.3` is published from `2904b206360cad628370639e9e85259063177eb5`.
-CI, CodeQL, release quality and both macOS packaging jobs passed. All six downloaded
-assets match published SHA-256 digests; both DMG manifests and image integrity
-checks passed. Static binary inspection confirmed the architecture, build label
-and release SHA for both builds. On 2026-10-25 the verified arm64 release was
-installed in `/Applications`, with the previous application and local data backed
-up. Native mock-only QA passed launch, Stop, stopped-state persistence, Resume
-without replay, and restart-to-Interrupted recovery without automatic execution.
-However, native `Retry step` does not show its confirmation or continue the run;
-post-interruption continuation is not certified for that released build. A subsequent
-fix on `codex/native-retry-confirmation` replaces native confirm with an in-app
-Cancel/Confirm retry panel and displays the actual selected run status. Separate
-arm64 desktop QA passed Cancel/Escape without mutation and confirmed Retry through
-completion without replaying completed steps. Code `2ac67f5`, installation report
-`1d4863b` and memory `af986ad` are preserved in merged
-[PR #19](https://github.com/vistadi/dildin-build-control/pull/19).
-The fix is merged and included in alpha.4, but installed alpha.3 still lacks it.
-Original user data was restored
-after preserving the QA session separately; alpha.3 remains installed and running.
-Live-provider, forced-crash and second-instance QA remain unperformed. See the
-2026-10-25 release and native-installation worklogs for evidence and limitations.
+and full release SHA in both binaries. Final documentation-commit CI `40201346582`
+and CodeQL `40201347794` also passed at `c4a7932`.
+
+On 2026-10-25 the verified arm64 alpha.4 was installed in `/Applications`, retaining
+a coordinated, byte-verified alpha.3 application/data backup. Native Settings
+confirms the release identity. Actual desktop mock QA passed launch, Stop,
+Stopped persistence across restart, Resume without completed-step replay, recovery
+to Interrupted without automatic execution, Cancel/Escape without changing attempts
+or evidence, and confirmed Retry to completion. Both tested loops finished seven
+steps at one attempt each, with pre-existing evidence unchanged. Statuses were correct.
+The alpha.3 Retry/Running defects are fixed in installed alpha.4 through PR #19.
+QA used the advanced legacy-loop path, not full Guided Harness or live providers.
+Original user data was restored after privately preserving the QA session; alpha.4
+is left open on Settings, safe mock enabled, real execution off and MCP isolated.
+Live-provider, forced-crash, Intel-window and second-instance QA remain unperformed.
+See `worklog/2026-10-25-alpha4-install-and-native-qa.md` for verification and rollback.
 
 ## Architecture
 
@@ -142,7 +134,8 @@ Live-provider, forced-crash and second-instance QA remain unperformed. See the
   `7db70dca15caf2cf632fc4445c55a3b479dc2e4b2802399050fdee5ce25c74eb`;
   x64 `494c8630cf10ded08a98571081e7c52b501e9cff5a60bab3f3c286cd262d5cbb`.
   This is artifact-level verification, not a new native-window or Intel launch test.
-  Distribution remains unsigned/non-notarized; installed alpha.3 and backups are unchanged.
+  Distribution remains unsigned/non-notarized. This release operation preserved
+  installed alpha.3; separately approved alpha.4 installation/QA is recorded below.
 - [PR #19](https://github.com/vistadi/dildin-build-control/pull/19) merged into main
   at `2026-10-25T12:54:34Z` as `4668e81`, preserving all three commits. Exact-head
   CI `40193630062` and CodeQL `40193630001` passed; aggregate check `121169909195`
@@ -205,10 +198,20 @@ Live-provider, forced-crash and second-instance QA remain unperformed. See the
   `src-tauri/target/release/bundle/dmg/Dildin Build Control_0.2.0_aarch64.dmg`. This
   earlier task did not install that bundle into `/Applications`.
 - `/Applications/Dildin Build Control.app` now runs the verified arm64
-  `v0.2.0-alpha.3` from `2904b206360cad628370639e9e85259063177eb5`, installed on
+  `v0.2.0-alpha.4` from `06a7ea5c3171305ce58cc534487696698df96917`, installed on
   2026-10-25. Native Settings confirms tag, full SHA, clean sources, release profile,
   architecture and executable path. Binary SHA-256:
+  `7fcde40baaa5f82916e1a1af03c8ea5379c72a513b92a9cc81ef1efefb4fd02b`.
+- Immediately preceding alpha.3 app plus matching Application Support/WebKit are
+  byte-verified at
+  `/Users/vitaliy/Library/Application Support/DBC Backups/2026-10-25-before-alpha4-zZc017`.
+  Rollback binary SHA-256:
   `61a9c458b2d950254f0345b462279a3eade7e244ee8a790d92e2c0cd13b5f8e8`.
+  `ROLLBACK.md` describes coordinated app/data restoration. `post-qa` preserves
+  the complete test session; `native-qa` contains the workspace, metadata and eight
+  screenshots. Before final relaunch both original data directories matched their
+  backups; after launch the main SQLite was still byte-identical, quick-check ok,
+  and contained only the original five failed loops. No QA loops remain in active data.
 - The previous installed app (numeric 0.2.0; exact prerelease not established),
   matching SQLite and WebKit state are byte-verified backups at
   `/Users/vitaliy/Library/Application Support/DBC Backups/2026-10-25-before-alpha3-y7oLQB`.
@@ -241,18 +244,25 @@ Live-provider, forced-crash and second-instance QA remain unperformed. See the
 ## Known limitations
 
 - The product remains an early alpha.
-- Installed arm64 alpha.3 cannot currently continue an interrupted loop through
+- Historical arm64 alpha.3 could not continue an interrupted loop through
   `Retry step`: mouse and keyboard activation produce no confirmation or new attempt.
   That release's handler uses `window.confirm` (`src/App.tsx`); locked Wry 0.55.1 macOS
   WKUIDelegate has no JavaScript-confirm handler, consistent with the observed
-  failure. The subsequent merged fix passed native mock Cancel/Retry QA, but is not
-  included in installed alpha.3. No fix was applied during the earlier installation.
+  failure. The fix is now installed in alpha.4 and passed release-binary native
+  mock Cancel/Escape/Retry QA. Alpha.3 rollback retains the historical defect.
 - Released alpha.3's Harness Runs helper badge incorrectly says Running for
   stopped/interrupted legacy loops. The merged fix now uses the selected loop's
   actual status, falling back to the HarnessRun status only without a selected loop.
   Desktop QA verified Interrupted, Running, Completed and Stopped; browser tests
-  also cover approval/budget/pending states. The fix is now released in alpha.4;
-  installed alpha.3 remains unchanged.
+  also cover approval/budget/pending states. Installed alpha.4 release-binary QA
+  confirms correct Interrupted, Running, Completed and Stopped statuses.
+- Workspace's internal tab-strip buttons have no handlers (`src/App.tsx`); use
+  the functional primary navigation. Native QA observed Tasks in that strip doing
+  nothing. This predates and does not invalidate the lifecycle fixes.
+- Legacy preflight route/build diagnostics still use global agent settings even
+  when Local Safe Mock resolves every actual step to `mock_adapter`. Fresh mock
+  workspaces also show an absent approval ledger as an artifact diagnostic error.
+  These need diagnostic/UX alignment; observed execution remained fully mock.
 - Native installation QA used the advanced legacy-loop path and mock adapters only.
   It did not certify live provider cancellation, crash-surviving descendants,
   second-instance exclusion, Intel launch, or the complete Guided Harness journey.
@@ -286,9 +296,9 @@ Live-provider, forced-crash and second-instance QA remain unperformed. See the
 
 Next priorities after the verified 2026-10-25 alpha.4 release:
 
-1. With separate approval, update the installed application to verified alpha.4,
-   preserving matching app/data rollback copies and checking native Cancel/Retry.
-   Then cover real-process cancellation, forced recovery and second-instance behavior.
+1. Fix the inert Workspace shortcuts and align preflight/artifact diagnostics with
+   effective mock routing, then cover real-process cancellation, forced recovery
+   and second-instance behavior in separately scoped fixtures.
    Validate pinned Kimi/Qwen contracts without weakening blocked/zero-tool profiles.
 2. Prototype one interactive agent integration (Kimi ACP or Codex app-server) with
    DBC-owned approval, cancellation, session identity, and evidence. ACP is not MCP

@@ -1,5 +1,27 @@
 # DBC Active Plans
 
+## 2026-10-25 — Alpha.4 installation and native lifecycle QA
+
+Status: completed. The maintainer confirmed installation, coordinated rollback
+backup and mock-only launch, Cancel/Retry, Stop/Resume and restart recovery checks.
+No live AI, security bypass, source change or remote Git publication is included.
+The maintainer subsequently approved the three-file local memory commit; push
+requires separate authorization.
+
+1. Alpha.3 app, Application Support and WebKit are byte-verified in private backup
+   `2026-10-25-before-alpha4-zZc017`; rollback instructions are included.
+2. Official arm64 alpha.4 is installed; native Settings confirms `06a7ea5`, clean
+   release build and `/Applications` executable. No security protection changed.
+3. Stop/restart/Resume, Interrupted recovery without auto-run, Cancel/Escape with
+   no mutation, and explicit Retry to completion passed. Completed evidence was
+   unchanged and every mock step finished with one attempt.
+4. QA workspace, complete test data and eight screenshots are preserved privately.
+   Original user data was restored byte-for-byte before relaunch; final SQLite is
+   identical to the backup and contains only the original five failed loops.
+   Alpha.4 remains open on Settings. This is the approved memory-only checkpoint.
+
+Evidence: `memory/worklog/2026-10-25-alpha4-install-and-native-qa.md`.
+
 ## 2026-10-25 — PR #19 merge and alpha.4 release
 
 Status: completed. PR #19 merged as `4668e81`; unsigned prerelease `v0.2.0-alpha.4`
