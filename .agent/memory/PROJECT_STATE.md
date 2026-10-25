@@ -10,17 +10,24 @@ build/smokes and deterministic EvidencePack verification. Review threads are emp
 remaining job annotations are informational runner-migration notices. Earlier
 `face710` checks also passed; no source fix was required for either verification.
 
-Release `v0.2.0-alpha.5` is being prepared through the existing unsigned arm64/x64
-workflow. The maintainer explicitly approved the five-file release-preparation
-commit, a three-file outcome-memory commit, push to main and the new tag. The tag
-was confirmed absent; publication and artifact checks are not yet complete. No new
-AI calls, installed-app changes or live-fixture rerun. Installed/latest verified
-release remains alpha.4. See `worklog/2026-10-25-pr20-merge-and-alpha5-release.md`.
+Latest published release: [v0.2.0-alpha.5](https://github.com/vistadi/dildin-build-control/releases/tag/v0.2.0-alpha.5),
+unsigned/non-notarized arm64/x64 prerelease at
+`e8b499eccd853b4fa0528cc68ede5c6a38eaec48`, published 2026-10-25 21:03:44 UTC.
+Release `40233185122`, CI `40233163396` and CodeQL `40233163483` all succeeded;
+release quality confirms 75 Rust tests. Post-merge CI/CodeQL passed on `a08b362`.
+All six downloaded assets match GitHub sizes/SHA-256 digests; both checksum
+manifests and DMG integrity checks passed. Static archive inspection confirms the
+two Mach-O architectures, alpha.5 label, full release SHA and target triples.
+No downloaded binary was executed or installed. Installed alpha.4's executable
+hash is unchanged; no new AI call or historical live-fixture rerun occurred.
+The approved outcome checkpoint changes only PLANS, PROJECT_STATE and the release
+worklog; its own new-head checks are separate from the verified release SHA.
+See `worklog/2026-10-25-pr20-merge-and-alpha5-release.md`.
 Local implementation validation passed 75 Rust tests, offline native build,
 TypeScript/Vite, ten smoke suites and formatting; the readiness-only snapshot
 additionally passed 63 tests. Source/CI validation is not live-provider certification.
 
-Last verified repository/release update: 2026-10-25. PR #19 merged into `main` as
+Previous release, still installed (2026-10-25): PR #19 merged into `main` as
 `4668e8122b89d9d77a50e6a8f0911cd679674179` after all five exact-head CI/CodeQL checks
 passed at `af986ad`, with no new CodeQL alerts and no review threads. Release
 `v0.2.0-alpha.4` is published from `06a7ea5c3171305ce58cc534487696698df96917`.

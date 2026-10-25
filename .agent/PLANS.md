@@ -2,7 +2,7 @@
 
 ## 2026-10-25 — Merge PR #20 and release alpha.5
 
-Status: PR #20 merged; alpha.5 release preparation in progress.
+Status: PR #20 merged; alpha.5 published and both architectures artifact-verified.
 The maintainer requested merge/release with no new AI calls, then explicitly
 approved both release-preparation/outcome-memory commits, push to main and the new
 `v0.2.0-alpha.5` tag. Installed alpha.4 and historical live evidence stay untouched.
@@ -10,11 +10,18 @@ approved both release-preparation/outcome-memory commits, push to main and the n
 1. Recheck exact head `f6ff4da`, all five successful CI/CodeQL checks, empty review
    threads and mergeability — done. No new CodeQL alerts in changed code.
 2. Merge preserving five commits, fast-forward local main — done: `a08b362`.
-3. Prepare changelog/memory, validate metadata, commit/push and create unused tag.
-4. Verify release quality, both macOS packages, six assets and SHA-256 manifests.
-5. Record actual results in the approved memory-only outcome commit and push.
+3. Prepare changelog/memory, validate metadata, commit/push and create unused tag —
+   done: release commit `e8b499e`, annotated tag `v0.2.0-alpha.5`.
+4. Verify release quality, both macOS packages, six assets and SHA-256 manifests —
+   done. All checks passed; both DMGs valid; static binaries match tag/SHA/target.
+5. Record actual results in the approved memory-only outcome checkpoint — prepared
+   in PLANS, PROJECT_STATE and the release worklog; commit/push is the final step.
 
-Latest published release remains alpha.4 until alpha.5 publication is verified.
+Latest published release: `v0.2.0-alpha.5` (unsigned prerelease); installed app remains
+alpha.4. Release `40233185122`, CI `40233163396` and CodeQL `40233163483` succeeded
+on exact release commit `e8b499eccd853b4fa0528cc68ede5c6a38eaec48`. Release quality
+confirms 75 Rust tests. Post-merge CI/CodeQL also passed on `a08b362`.
+Release: https://github.com/vistadi/dildin-build-control/releases/tag/v0.2.0-alpha.5
 No signing/workflow changes, bypasses, installation or provider execution.
 Evidence: `memory/worklog/2026-10-25-pr20-merge-and-alpha5-release.md`.
 
