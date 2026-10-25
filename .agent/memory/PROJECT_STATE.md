@@ -1,16 +1,15 @@
 # DBC Project State
 
-Last verified repository/CI update: 2026-10-25. PR #18 is merged into remote `main`
-at `66dcf66de3d1d67856c721c2a167b340d3747b10`, including PR #16 and durable
-Stop/Resume. All five PR checks passed at head `9c1cebc`; aggregate CodeQL reported
-no new alerts and no reviews or review threads were returned. The maintainer's
-latest request authorizes merge and release. `v0.2.0-alpha.3` is being prepared;
-both proposed release/memory commits, push to `main` and the new tag are explicitly
-approved. Post-merge CI and both CodeQL analyses passed at `66dcf66`.
-The release is not yet tagged or published at this checkpoint. Local build/test evidence
-remains dated 2026-10-24. Installation observations below remain dated 2026-09-01
-or earlier; no installed-app replacement, live-provider fixture or native-window
-end-to-end QA was performed.
+Last verified repository/release update: 2026-10-25. PR #18 merged into `main` as
+`66dcf66`, including PR #16 and durable Stop/Resume. Unsigned macOS prerelease
+`v0.2.0-alpha.3` is published from `2904b206360cad628370639e9e85259063177eb5`.
+CI, CodeQL, release quality and both macOS packaging jobs passed. All six downloaded
+assets match published SHA-256 digests; both DMG manifests and image integrity
+checks passed. Static binary inspection confirmed the architecture, build label
+and release SHA for both builds; neither application was launched or installed.
+Local runtime QA remains dated 2026-10-24. Installed-app observations below remain
+dated 2026-09-01 or earlier; live-provider and native-window end-to-end QA were not
+performed. The detailed release evidence is in the 2026-10-25 worklog.
 
 ## Architecture
 
@@ -114,8 +113,19 @@ end-to-end QA was performed.
   Exact-head CI `40127899814` and CodeQL `40127899761` passed, as did aggregate
   CodeQL check `120973402414` (no new alerts). Normal signed-in browser merge
   succeeded after connector HTTP 403; no permissions or check protections changed.
-  Local `main` was fast-forwarded. The next unsigned prerelease is planned as
-  `v0.2.0-alpha.3`; tag absence was verified before preparation.
+  Local `main` was fast-forwarded before release preparation.
+- [Release v0.2.0-alpha.3](https://github.com/vistadi/dildin-build-control/releases/tag/v0.2.0-alpha.3)
+  was published on 2026-10-25 from `2904b20`, after the explicitly approved release
+  commit and new annotated tag. Release workflow `40181600137` passed its complete
+  quality gate (60 Rust tests) and arm64/x64 packaging; CI `40181596283` and CodeQL
+  `40181596272` passed on the same source commit. Six public assets are present:
+  two app archives, two DMGs and two SHA-256 manifests. Downloaded asset sizes and
+  digests match GitHub; both manifests verify and both DMGs pass `hdiutil verify`.
+  DMG SHA-256: arm64 `d5cf33c4669215d85b4ab17bc367747516bc7d63b3ae32207c610c1dfe38d229`;
+  x64 `23abd17e29e8e3c1a02a8a6d02e75245dfb0b770bdb03da954d26925cdd8fa48`.
+  Both Mach-O architecture headers and embedded alpha.3 label/`2904b20` full SHA
+  were statically verified. This is unsigned, non-notarized alpha distribution,
+  not native-window end-to-end or installation verification.
 - The 2026-10-24 runtime commit `c4b4287` and memory commit `c8fe6dd` are pushed to
   `codex/native-execution-diagnostics` in now-merged
   [PR #16](https://github.com/vistadi/dildin-build-control/pull/16) targeting `main`.
@@ -208,10 +218,9 @@ end-to-end QA was performed.
 
 ## Immediate priorities
 
-Next priorities after the approved 2026-10-24 implementation milestone:
+Next priorities after the verified 2026-10-25 alpha.3 release:
 
-1. Complete the approved alpha.3 release and verify both architectures and published
-   checksums; then validate packaged native-window IPC/restart and pinned Kimi/Qwen contracts;
+1. Validate packaged native-window IPC/restart/second-launch behavior and pinned Kimi/Qwen contracts;
    keep existing blocked/zero-tool profiles until replacement safeguards are verified.
 2. Prototype one interactive agent integration (Kimi ACP or Codex app-server) with
    DBC-owned approval, cancellation, session identity, and evidence. ACP is not MCP

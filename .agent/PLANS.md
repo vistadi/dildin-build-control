@@ -2,24 +2,25 @@
 
 ## 2026-10-25 — PR #18 merge and alpha.3 release
 
-Status: PR #18 merged into `main` as `66dcf66`; release preparation is in progress.
-The maintainer explicitly requested merge and release, superseding the previous
-publication-only restriction. Five exact-head checks passed, including aggregate
-CodeQL with no new alerts; review and review-thread lists were empty.
+Status: completed. PR #18 merged into `main` as `66dcf66`; unsigned prerelease
+`v0.2.0-alpha.3` is published from release commit `2904b20`. The maintainer approved
+both release/memory commit groups, push to `main` and the new tag.
 
 1. Merge the verified PR without bypassing checks — completed through the signed-in
    browser after the connector returned HTTP 403; API confirmed the merge.
-2. Prepare `v0.2.0-alpha.3` changelog and correct the signing guide to match the
-   unsigned workflow. Keep numeric package/Tauri/Cargo versions at `0.2.0`.
-3. The maintainer approved both proposed release-preparation/outcome memory commits,
-   push to `main` and the new tag on 2026-10-25. Inspect their exact file groups,
-   then commit and push.
-4. Push the new immutable tag only after release metadata validation. Check the
-   quality gate, both macOS jobs, six release assets and DMG checksum manifests.
-5. Record actual publication results. Do not replace the installed application or
-   claim native-window end-to-end, Developer ID signing or notarization verification.
+2. Release metadata and signing documentation were prepared and committed as
+   `2904b20`; numeric package/Tauri/Cargo versions remain `0.2.0`.
+3. The new annotated tag was pushed without rewriting existing tags. Release run
+   `40181600137`, CI and CodeQL succeeded; the release gate passed all 60 Rust tests.
+4. Both macOS packaging jobs passed. All six downloaded assets match GitHub sizes
+   and SHA-256 digests; both manifests report `OK` and both DMGs pass `hdiutil verify`.
+   Static inspection confirms the two Mach-O architectures and embedded tag/SHA.
+5. This outcome-memory checkpoint records the verified results. The installed app
+   was not replaced; native-window end-to-end QA, signing and notarization remain
+   separate, unverified work.
 
-Evidence and pending checks: `memory/worklog/2026-10-25-pr18-merge-and-alpha3-release.md`.
+Release: <https://github.com/vistadi/dildin-build-control/releases/tag/v0.2.0-alpha.3>.
+Evidence: `memory/worklog/2026-10-25-pr18-merge-and-alpha3-release.md`.
 
 ## 2026-10-24 — Durable Stop/Resume
 
@@ -29,7 +30,7 @@ Status: implemented, locally verified and merged through
 approval excluded merge/release; the later explicit request authorized both.
 See `memory/worklog/2026-10-24-durable-stop-resume.md` for inventory, 60 Rust tests,
 frontend/native builds, browser QA and remaining native-window verification.
-Release preparation is tracked above; no live provider or installation was performed.
+The alpha.3 release is recorded above; no live provider or installation was performed.
 
 1. Persist stopping/stopped/interrupted states; serialize transitions and distinguish
    queued work from an executing attempt. Never auto-replay work after interruption.
