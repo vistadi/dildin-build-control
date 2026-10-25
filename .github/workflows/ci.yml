@@ -52,6 +52,7 @@ jobs:
         run: |
           pnpm ui-quality-smoke
           pnpm native-contract-smoke
+          pnpm loop-lifecycle-smoke
 
       - name: Enforce frontend performance budget
         run: pnpm performance-budget

@@ -1,8 +1,10 @@
 # DBC Project State
 
-Last verified source/build/test update: 2026-10-24 (`c4b4287`, based on `d688407`).
-Runtime implementation is pushed to `codex/native-execution-diagnostics`; remote
-`main` was independently checked at `d688407`. The distribution and
+Last verified source/build/test update: 2026-10-24. PR #16 is merged into remote
+`main` at `3b21f74`. Follow-up Stop/Resume runtime commit `5110d0a` is locally verified
+and pushed on `codex/durable-stop-resume` in open PR #18, based on that merge. This
+approved memory checkpoint records publication. Final-head CI/CodeQL and review are
+not certified here; merge and release are explicitly not authorized. The distribution and
 installation observations below remain dated 2026-09-01 or earlier; no new release,
 installation, live-provider fixture or native-window end-to-end QA was performed.
 
@@ -56,10 +58,10 @@ installation, live-provider fixture or native-window end-to-end QA was performed
 - UI hardening includes English navigation and primary actions, fixed `lang=en`,
   skip navigation, keyboard focus, reduced motion, local-only opt-in diagnostics, CSP,
   responsive layouts, and enforced JS/CSS performance budgets.
-- The 2026-10-24 production frontend build passed at 423,305 B JS / 115,364 B gzip
+- The PR #16 baseline production frontend build passed at 423,305 B JS / 115,364 B gzip
   and 41,468 B CSS / 8,308 B gzip, within the recorded budgets. The Dibi mark and workshop image add
   271,886 B and 558,444 B respectively to the production assets.
-- Rust tests passed: 51 passed, 0 failed. Offline native debug build, TypeScript and
+- PR #16 baseline Rust tests passed: 51 passed, 0 failed. Offline native debug build, TypeScript and
   Vite build passed. Provider,
   MCP policy, MCP proxy, API adapter, Guided Run, UI quality, native contract, and
   performance checks passed; the complete final rerun is recorded in the current
@@ -84,10 +86,33 @@ installation, live-provider fixture or native-window end-to-end QA was performed
   then verified 1487×1058 desktop, 1024×768 tablet, and 430×932 mobile states. No P0,
   P1, or P2 findings remain; the final browser console had no warnings or errors.
 
+- Follow-up Stop/Resume persists stopping/stopped/interrupted in SQLite and claims
+  an executing attempt before side effects. Stop confirms only after loop ownership
+  is released; late completion preserves Stop. Resume cannot retry interrupted/failed
+  work. Explicit Retry retains budgets and archives prior evidence. Pending approvals
+  cannot be bypassed and are restored when opening the run.
+- Startup marks unfinished work interrupted without replay. A separate exclusive
+  SQLite runtime lease coordinates instances of this version; older versions do not
+  honor it and must be closed first. Crash-surviving processes require inspection.
+- Stop/Resume checks: 60 Rust tests, native debug build, TypeScript/Vite build, nine
+  behavioral continuation/recovery scenarios and existing smoke gates passed. Real
+  local-process cancellation, partial evidence and SQLite reopen were tested. Actual
+  browser controls were checked at 375/768/1440 widths. Packaged native-window IPC and
+  app restart were not exercised end-to-end. See `docs/STOP_RESUME.md`.
+  Publication rerun also passed all 60 Rust tests, formatting, native debug build,
+  TypeScript/Vite and every listed smoke gate; JS measured 427,351 B / 116,557 B gzip,
+  CSS 41,515 B / 8,330 B gzip. Both remain within the enforced budgets.
+
 ## Distribution state
 
+- Stop/Resume runtime `5110d0ae36f4962a0e28606ec153f96ec8c00d07` is pushed to
+  `codex/durable-stop-resume`, with open
+  [PR #18](https://github.com/vistadi/dildin-build-control/pull/18) targeting `main`.
+  Creation used the signed-in browser after connector HTTP 403, without changing
+  permissions. The approved second commit contains the six memory files. This is
+  source publication only: no merge, auto-merge, release or installation.
 - The 2026-10-24 runtime commit `c4b4287` and memory commit `c8fe6dd` are pushed to
-  `codex/native-execution-diagnostics` in open
+  `codex/native-execution-diagnostics` in now-merged
   [PR #16](https://github.com/vistadi/dildin-build-control/pull/16) targeting `main`.
   GitHub API verification confirmed head `c8fe6dd`, two commits, 25 files and
   `merged: false` at creation. The maintainer signed in and browser submission
@@ -102,8 +127,12 @@ installation, live-provider fixture or native-window end-to-end QA was performed
   open at review and no bypass/dismissal was made. The maintainer then approved removal
   of raw stderr from the assertion diagnostic, commits/push and merge after green
   exact-head CI. This test-only change preserves status/output/acceptance assertions;
-  formatting and all 51 Rust tests pass locally. New-head remote checks are pending;
-  no merge has occurred at this checkpoint. Main remains `d688407`; no release was published.
+  formatting and all 51 Rust tests passed locally. Follow-ups `8358e63` (test) and
+  `ea402f1` (memory) were committed/pushed. CI `40123421084` and CodeQL `40123421116`
+  passed; aggregate check `120959885871` reported no new alerts and the browser
+  marked the security thread Fixed. After the connector's merge 403, the signed-in
+  browser merged PR #16 as `3b21f7446caca6fb216f395c0f4a3be542b307cc`; API confirmed
+  merged at `2026-10-24T19:08:09Z`. Local main was fast-forwarded. No new release.
 - Release metadata is aligned at `0.2.0`. Tag `v0.2.0-alpha.1` points to release commit
   `8f12f95`; its complete quality gate passed, but both macOS packaging jobs failed
   before a GitHub Release was created. The non-destructive follow-up
@@ -150,7 +179,9 @@ installation, live-provider fixture or native-window end-to-end QA was performed
   deterministic local processes exceeding pipe capacity. Other subprocess paths
   (for example Git/MCP helpers) were not migrated wholesale. Non-Unix descendant
   termination is not implemented; detached descendants escaping the owned Unix group
-  are outside the guarantee. Stop is not rollback or a durable database pause command.
+  are outside the guarantee. Merged PR #16 Stop was not a durable pause; the PR #18
+  follow-up adds persistent lifecycle states. Stop is still not rollback. Inspect
+  external processes after a crash before explicitly retrying.
 - The Qwen profile still requires `--approval-mode plan`. Current official Qwen
   references and the 2026-09-10 changelog disagree about Plan/permission semantics.
   A pinned-version compatibility fixture is needed before changing the guard.
@@ -174,8 +205,8 @@ installation, live-provider fixture or native-window end-to-end QA was performed
 
 Next priorities after the approved 2026-10-24 implementation milestone:
 
-1. Review PR #16 and its CI results, then validate native UI
-   stop/resume and pinned Kimi/Qwen contracts;
+1. Review open PR #18 and its exact-head CI/CodeQL; validate
+   packaged native-window IPC/restart and pinned Kimi/Qwen contracts;
    keep existing blocked/zero-tool profiles until replacement safeguards are verified.
 2. Prototype one interactive agent integration (Kimi ACP or Codex app-server) with
    DBC-owned approval, cancellation, session identity, and evidence. ACP is not MCP

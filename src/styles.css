@@ -3125,3 +3125,6 @@ pre {
     padding: 0 18px 22px;
   }
 }
+.loop-lifecycle-controls button {
+  min-width: 9rem;
+}

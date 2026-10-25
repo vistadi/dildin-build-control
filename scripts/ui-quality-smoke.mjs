@@ -22,8 +22,8 @@ const checks = [
   [app.includes("<BuildIdentityPanel />") && diagnostics.includes("Browser preview"), "build identity distinguishes native and browser preview"],
   [diagnostics.includes("role=\"alert\"") && diagnostics.includes("Retry build details"), "build diagnostics includes failure and retry states"],
   [diagnostics.includes("disabled={pending}") && diagnostics.includes("aria-label={`Stop"), "process stop has pending state and accessible name"],
-  [app.includes("cancelLoopProcesses(currentLoop.id)") && app.includes("if (disposed) return"), "loop stop requests native cancellation and ignores stale results"],
-  [app.includes('setCurrentLoop(current => current ? { ...current, status: "stopped" } : current)'), "stopped loop remains available for explicit resume"],
+  [app.includes("stopBackendLoop(target.id, target)") && app.includes("if (disposed) return"), "loop stop awaits durable native cancellation and ignores stale results"],
+  [app.includes("LoopLifecycleControls") && app.includes("resumeBackendLoop"), "stopped loop exposes explicit Resume separately from Retry"],
 ];
 
 const failures = checks.filter(([ok]) => !ok);

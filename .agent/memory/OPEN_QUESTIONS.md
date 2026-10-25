@@ -49,10 +49,11 @@
 - Result: maintainer approved removing raw stderr from the test assertion, commits
   and push, then merge only after green CI/CodeQL. Keep all behavior assertions and
   CodeQL coverage; no alert dismissal or bypass. The edit and local formatting/51
-  Rust tests passed; remote verification and merge remain pending at this checkpoint.
+  Rust tests passed. Subsequently `8358e63` and `ea402f1` were pushed, all five
+  exact-head checks passed, and PR #16 merged into main as `3b21f74`. No dismissal.
 - Affected modules: `src-tauri/src/main.rs` test diagnostic and PR #16.
 - Owner: project maintainer.
-- Status: resolution approach approved; execution tracked in the worklog.
+- Status: resolved and merged; execution evidence is recorded in the worklog.
 - Evidence: `worklog/2026-10-24-pr-16-review-and-ci.md`.
 
 ### 2026-07-28 — Which design partners represent the first target segment?

@@ -67,6 +67,7 @@ jobs:
         run: |
           pnpm ui-quality-smoke
           pnpm native-contract-smoke
+          pnpm loop-lifecycle-smoke
           pnpm performance-budget
 
       - name: Verify a deterministic EvidencePack

@@ -47,6 +47,8 @@ import type {
   WorkSlice,
 } from "./types";
 
+import { continuePreviewLoop } from "./loopLifecycle";
+
 export function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
@@ -87,6 +89,14 @@ export async function cancelCliProcess(id: string): Promise<boolean> {
 
 export async function cancelLoopProcesses(loopId: string): Promise<number> {
   return isTauriRuntime() ? invoke<number>("cancel_loop_processes", { loopId }) : 0;
+}
+
+export async function stopBackendLoop(loopId: string, current?: LoopRunSnapshot): Promise<LoopRunSnapshot> {
+  if (!isTauriRuntime()) {
+    if (!current) throw new Error("Browser loop fallback requires current snapshot.");
+    return { ...current, status: current.status === "completed" ? "completed" : "stopped" };
+  }
+  return fromBackendLoopSnapshot(await invoke<BackendLoopRunSnapshot>("stop_loop_run", { loopId }));
 }
 
 export async function testSecretRef(secretRef: string) {
@@ -1627,6 +1637,7 @@ export async function runControlledSmokeLoop(projectId: string, projectPath: str
 export async function advanceBackendLoop(loopId: string, current?: LoopRunSnapshot): Promise<LoopRunSnapshot> {
   if (!isTauriRuntime()) {
     if (!current) throw new Error("Browser loop fallback requires current snapshot.");
+    if (current.status !== "running") return current;
     const active = current.activeStepIndex;
     const steps = current.steps.map((step, index) => {
       if (index < active) return { ...step, status: "passed" as const };
@@ -1634,6 +1645,7 @@ export async function advanceBackendLoop(loopId: string, current?: LoopRunSnapsh
         return {
           ...step,
           status: "passed" as const,
+          attemptCount: (step.attemptCount ?? 0) + 1,
           evidence: `Browser preview artifact recorded for ${step.agent}.`,
           output: `${step.state} completed in browser preview.`,
           artifactPath: `.dbc/artifacts/browser-preview/${step.id}.md`,
@@ -1659,15 +1671,7 @@ export async function advanceBackendLoop(loopId: string, current?: LoopRunSnapsh
 export async function resumeBackendLoop(loopId: string, current?: LoopRunSnapshot): Promise<LoopRunSnapshot> {
   if (!isTauriRuntime()) {
     if (!current) throw new Error("Browser loop fallback requires current snapshot.");
-    return {
-      ...current,
-      status: "running",
-      steps: current.steps.map((step, index) =>
-        index === current.activeStepIndex
-          ? { ...step, status: "running", output: "", evidence: step.evidence.replace(/\n?Artifact:.+$/s, "") }
-          : step,
-      ),
-    };
+    return continuePreviewLoop(current, false);
   }
 
   const snapshot = await invoke<BackendLoopRunSnapshot>("resume_loop_run", { loopId });
@@ -1677,20 +1681,7 @@ export async function resumeBackendLoop(loopId: string, current?: LoopRunSnapsho
 export async function retryBackendLoop(loopId: string, current?: LoopRunSnapshot): Promise<LoopRunSnapshot> {
   if (!isTauriRuntime()) {
     if (!current) throw new Error("Browser loop fallback requires current snapshot.");
-    const active = current.activeStepIndex;
-    const step = current.steps[active];
-    if (step && (step.attemptCount ?? 0) >= (step.maxAttempts ?? 3)) {
-      throw new Error(`Step ${step.id} already used ${step.attemptCount ?? 0}/${step.maxAttempts ?? 3} attempts.`);
-    }
-    return {
-      ...current,
-      status: "running",
-      steps: current.steps.map((item, index) =>
-        index === active
-          ? { ...item, status: "running", output: "", lastError: "", requiresApproval: false }
-          : item,
-      ),
-    };
+    return continuePreviewLoop(current, true);
   }
 
   const snapshot = await invoke<BackendLoopRunSnapshot>("retry_loop_step", { loopId });
