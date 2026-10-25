@@ -11,7 +11,15 @@ installed in `/Applications`, with the previous application and local data backe
 up. Native mock-only QA passed launch, Stop, stopped-state persistence, Resume
 without replay, and restart-to-Interrupted recovery without automatic execution.
 However, native `Retry step` does not show its confirmation or continue the run;
-post-interruption continuation is not certified. Original user data was restored
+post-interruption continuation is not certified for that released build. A subsequent
+fix on `codex/native-retry-confirmation` replaces native confirm with an in-app
+Cancel/Confirm retry panel and displays the actual selected run status. Separate
+arm64 desktop QA passed Cancel/Escape without mutation and confirmed Retry through
+completion without replaying completed steps. Code `2ac67f5` and the approved
+installation report `1d4863b` are pushed in open
+[PR #19](https://github.com/vistadi/dildin-build-control/pull/19).
+The fix is not merged or released; remote checks are tracked on that PR.
+Original user data was restored
 after preserving the QA session separately; alpha.3 remains installed and running.
 Live-provider, forced-crash and second-instance QA remain unperformed. See the
 2026-10-25 release and native-installation worklogs for evidence and limitations.
@@ -209,13 +217,15 @@ Live-provider, forced-crash and second-instance QA remain unperformed. See the
 - The product remains an early alpha.
 - Installed arm64 alpha.3 cannot currently continue an interrupted loop through
   `Retry step`: mouse and keyboard activation produce no confirmation or new attempt.
-  The handler uses `window.confirm` (`src/App.tsx`); the locked Wry 0.55.1 macOS
+  That release's handler uses `window.confirm` (`src/App.tsx`); locked Wry 0.55.1 macOS
   WKUIDelegate has no JavaScript-confirm handler, consistent with the observed
-  failure. Replace this with a supported explicit confirmation and verify both
-  Cancel and Retry in the packaged app. No fix was applied during installation QA.
-- The Harness Runs helper badge incorrectly says Running for stopped/interrupted
-  legacy loops, even though the detailed persisted status is correct. Its current
-  condition treats any non-failed `currentLoop` as running.
+  failure. The subsequent branch fix passed native mock Cancel/Retry QA, but is not
+  included in installed alpha.3. No fix was applied during the earlier installation.
+- Released alpha.3's Harness Runs helper badge incorrectly says Running for
+  stopped/interrupted legacy loops. The branch fix now uses the selected loop's
+  actual status, falling back to the HarnessRun status only without a selected loop.
+  Desktop QA verified Interrupted, Running, Completed and Stopped; browser tests
+  also cover approval/budget/pending states. No new release was created.
 - Native installation QA used the advanced legacy-loop path and mock adapters only.
   It did not certify live provider cancellation, crash-surviving descendants,
   second-instance exclusion, Intel launch, or the complete Guided Harness journey.
@@ -249,9 +259,9 @@ Live-provider, forced-crash and second-instance QA remain unperformed. See the
 
 Next priorities after the verified 2026-10-25 alpha.3 release:
 
-1. Fix packaged-native Retry confirmation and the misleading lifecycle helper badge;
-   verify Cancel/no side effects and explicit Retry with preserved attempt/evidence history.
-   Then cover real-process cancellation, forced recovery and second-instance behavior.
+1. Review PR #19 and its remote checks, without merge or release until separately
+   approved. Then cover real-process cancellation, forced recovery
+   and second-instance behavior.
    Validate pinned Kimi/Qwen contracts without weakening blocked/zero-tool profiles.
 2. Prototype one interactive agent integration (Kimi ACP or Codex app-server) with
    DBC-owned approval, cancellation, session identity, and evidence. ACP is not MCP

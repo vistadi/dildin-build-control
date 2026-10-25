@@ -1,5 +1,24 @@
 # DBC Active Plans
 
+## 2026-10-25 — Native Retry confirmation and lifecycle status
+
+Status: implemented, locally verified and published in
+[PR #19](https://github.com/vistadi/dildin-build-control/pull/19) from
+`codex/native-retry-confirmation`. Maintainer approved fixes,
+desktop Cancel/Retry QA, commits, push and a separate PR; no merge or release.
+The previously approved installation report is committed as `1d4863b`.
+
+1. In-app confirmation bound to the current attempt; Cancel/Escape do no work — passed.
+2. Actual selected-run status replaces inferred Running — verified in native UI.
+3. 60 Rust tests, 11 lifecycle scenarios, frontend/native builds, existing smoke
+   gates and 375/768/1440 controls passed. Native Cancel/Escape retained identical
+   SQLite metadata/evidence; Confirm retry completed the interrupted mock loop once.
+4. Code `2ac67f5` and installation report `1d4863b` are pushed; PR #19 is open.
+   Created through the signed-in browser after connector HTTP 403. No permissions,
+   installed alpha.3, merge or release changed. Remote checks remain the PR gate.
+
+Evidence: `memory/worklog/2026-10-25-native-retry-confirmation.md`.
+
 ## 2026-10-25 — Alpha.3 installation and native lifecycle QA
 
 Status: installation and bounded verification completed; native Retry defect found.
@@ -22,7 +41,8 @@ checking launch, Stop/Resume and recovery. No source fix, commit or push was aut
 Next implementation checkpoint: replace unsupported native `window.confirm` usage
 with explicit supported confirmation, fix the misleading Running helper badge, and
 retest Cancel/Retry in the packaged app. Requires a separate implementation request.
-Memory commit/push approval remains pending.
+The follow-up request approved this memory commit (`1d4863b`) and the separate fix
+checkpoint above; installation findings remain valid for released alpha.3.
 Evidence: `memory/worklog/2026-10-25-alpha3-install-and-native-qa.md`.
 
 ## 2026-10-25 — PR #18 merge and alpha.3 release
