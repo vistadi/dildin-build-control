@@ -1,3 +1,5 @@
+import { parseProviders } from "./lib/providers.mjs";
+import { distributionEvidence } from "./lib/distribution-evidence.mjs";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -23,7 +25,6 @@ const blockers = [];
 
 checkFile("providers.yaml", providersPath);
 checkFile("policy.yaml", policyPath);
-checkFile("release package", releasePath);
 
 const codex = providers.find((provider) => provider.id === "codex_cli");
 const claude = providers.find((provider) => provider.id === "claude_code");
@@ -55,7 +56,7 @@ if (providers.some((provider) => provider.type === "cli" && provider.runMode ===
 }
 
 checkPolicy(policyText);
-checkRelease(release);
+checks.push(distributionEvidence(release));
 checkSmoke(smoke, latestSmoke);
 checkGitWorkspace();
 
@@ -119,7 +120,7 @@ function checkProvider(name, provider, options) {
     fail(name, `${name} provider is missing.`);
     return;
   }
-  if (provider.enabled !== "true") {
+  if (provider.enabled !== true) {
     fail(name, `${name} is not enabled.`);
   } else {
     pass(name, `${name} is enabled.`);
@@ -159,20 +160,6 @@ function checkPolicy(text) {
   }
   for (const item of requiredDeny) {
     text.includes(item) ? pass("policy deny", `${item} is denied.`) : fail("policy deny", `${item} is missing.`);
-  }
-}
-
-function checkRelease(value) {
-  if (!value) {
-    fail("release", "Release package is missing.");
-    return;
-  }
-  const checklist = value.checklist || {};
-  const failed = Object.entries(checklist).filter(([, ready]) => ready !== true);
-  if (failed.length) {
-    fail("release", `Release checklist has failing items: ${failed.map(([key]) => key).join(", ")}`);
-  } else {
-    pass("release", `Release package ready; DMG checksum ${value.checksums?.dmg || "missing"}.`);
   }
 }
 
@@ -249,27 +236,6 @@ function findLatestControlledSmokeReport() {
 function readJsonIfExists(filePath) {
   if (!filePath || !existsSync(filePath)) return undefined;
   return JSON.parse(readFileSync(filePath, "utf8"));
-}
-
-function parseProviders(text) {
-  const blocks = text.split(/\n  - id: /).slice(1);
-  return blocks.map((block) => {
-    const lines = block.split("\n");
-    const provider = { id: lines[0].trim() };
-    for (const line of lines.slice(1)) {
-      const match = line.match(/^    ([A-Za-z0-9_]+):\s*(.*)$/);
-      if (!match) continue;
-      provider[match[1]] = unquote(match[2].trim());
-    }
-    return provider;
-  });
-}
-
-function unquote(value) {
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    return value.slice(1, -1);
-  }
-  return value;
 }
 
 function isExactPath(value) {

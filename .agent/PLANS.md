@@ -1,5 +1,113 @@
 # DBC Active Plans
 
+## 2026-10-25 — Verify PR #20 CI and CodeQL
+
+Status: completed at head `face7108a2a4b9af1c07608aa4599d805a4332ca`.
+CI `40231602459` and CodeQL `40231602444` succeeded; all five check runs passed,
+including aggregate CodeQL with no new alerts in changed code. CI confirms 75
+Rust tests, formatting, frontend build/smokes and deterministic EvidencePack checks.
+The temporary missing-Rust result cleared after analysis completed. Only runner
+migration notices remain; review threads are empty. No fix, commit or push needed.
+PR remains open/unmerged; main, installed alpha.4 and live fixtures are unchanged.
+No new AI calls, merge or release. The maintainer subsequently approved one
+documentation-only checkpoint and push of PLANS, PROJECT_STATE and the verification
+worklog to the same feature branch. This checkpoint records results for `face710`;
+its own new-head CI must be evaluated separately, not assumed green.
+
+Evidence: `memory/worklog/2026-10-25-pr20-ci-and-codeql.md`.
+
+## 2026-10-25 — Publish readiness and evidence fixes for review
+
+Status: published as PR #20 on `codex/readiness-evidence-integrity`, open/unmerged.
+Maintainer explicitly approved all verified readiness/evidence commits, push and a
+PR to main; no new AI calls, merge, release or installed-app update.
+
+1. Review all 34 pending files and split readiness/evidence hunks — done.
+2. Re-run local checks and verify the readiness-only staged snapshot — done:
+   75 combined Rust tests; 63 readiness-only tests; TypeScript/Vite, ten smoke
+   suites, offline native build and formatting passed.
+3. Readiness `cbae019`, evidence `19baab0` and memory `de3e62a` committed/pushed.
+4. PR #20 created via signed-in browser after connector HTTP 403, attached and
+   verified by API: base main `0a05edf`, initial head `de3e62a`, 35 changed files,
+   open/non-draft/unmerged. No auto-merge or tags. This memory-only follow-up records
+   publication; runtime sources are unchanged.
+
+CI `40231506333` and CodeQL `40231506334` were in progress on initial head `de3e62a`.
+Publication-record commit `face710` was subsequently pushed; its exact-head checks
+are now verified in the plan above. Any merge still needs separate authorization.
+PR: https://github.com/vistadi/dildin-build-control/pull/20
+
+Evidence: `memory/worklog/2026-10-25-readiness-evidence-publication.md`.
+
+## 2026-10-25 — Evidence handoff, finding semantics and non-Git scope
+
+Status: implemented and locally verified; source committed as `19baab0` in the
+publication plan above. Original fix scope prohibited AI calls/publication; the
+later explicit request authorizes commits/push/PR only. Installed-app/data unchanged.
+
+1. Bind inter-step evidence to current run/task/step/attempt and checksums; require
+   valid citations for real review/acceptance, with negative regression coverage.
+2. Separate redaction events from credential evidence without dropping detection
+   of real credential-shaped output or exposing it in logs.
+3. Capture bounded non-Git file fingerprints before execution, compare additions,
+   modifications and deletions, reject incomplete/unsafe snapshots and scope changes.
+4. Run offline Rust tests, deterministic local fixtures, frontend/contracts and
+   inspect diff; update memory with actual results and a proposed commit inventory.
+
+All four items are complete. 75 Rust tests, offline native build, TypeScript/Vite,
+all ten smoke suites, formatting and diff checks passed. Deterministic `/bin/cat`
+responses test rejected citations, Retry without replay, accepted valid evidence
+and blocked tampering; no model CLI is called. Historical live results remain
+failed/blocked. New provider/desktop verification requires separate authorization.
+
+Evidence: `memory/worklog/2026-10-25-evidence-integrity-and-non-git-scope.md`.
+
+## 2026-10-25 — Generic project readiness fix and bounded live retest
+
+Status: fixes locally verified; bounded live test finished with acceptance blocked.
+Maintainer approved both fixes and up to eight AI calls, no commit/push/release.
+Adding `yaml` to DBC's dev dependencies was separately approved.
+
+1. Shared structural provider parsing/profile round trips across ten helpers — done.
+2. Distribution evidence informational; human/task/budget/preflight remain gated — done.
+3. 63 Rust tests, readiness regressions, frontend build and existing smokes — passed.
+4. Separate `DBC Readiness QA` bundle, fresh README project, native-saved config,
+   successful controlled baseline and native ready-to-run — verified. Codex plan/code
+   and local assertions passed. After confirmed Claude login, native Retry resumed
+   only QA; QA/review/security passed. Acceptance requested changes because actual
+   evidence review was unsubstantiated and security findings remained unresolved.
+   Seven of eight total CLI invocations used (four of the five remaining allowance).
+5. Safe mock restored, QA closed, private evidence/data copies byte-verified.
+   Installed alpha.4 binary and original SQLite remain unchanged. No Git publication.
+
+The follow-up evidence/finding/non-Git fixes are now locally implemented and tested.
+Readiness is committed as `cbae019`; publication follows the newer plan above.
+No new live retry occurred; the remaining call, merge and release are not authorized.
+
+Evidence: `memory/worklog/2026-10-25-generic-project-readiness-fix.md` and
+`memory/worklog/2026-10-25-real-provider-retry-after-login.md`.
+
+## 2026-10-25 — Real-provider disposable example
+
+Status: investigation completed; live execution blocked before any AI call.
+Approved: one README marker change in a separate project,
+local validation and Codex/Claude review, at most eight AI CLI calls. No commit,
+push, install, secret access, source fix or release; restore safe mock afterward.
+
+1. Original app data backed up and byte-compared; fresh synthetic project prepared.
+2. Installed native Checklist/Dry-run reproduced blocked readiness. Required
+   release generation assumes a Tauri app/DMG in the target project; native-saved
+   providers YAML also fails the helper scripts' format-specific parser.
+3. No gate bypass, approval artifact or live loop. README unchanged, zero of eight
+   AI calls used. Evidence/test session preserved privately; original Application
+   Support/WebKit restored byte-for-byte, app relaunched in safe mock.
+
+Follow-up: both fixes and the bounded retest were approved and performed in the
+plan above. This entry preserves the initial blocked attempt, not current fix status.
+No commit/push is authorized for this task.
+
+Evidence: `memory/worklog/2026-10-25-real-provider-example.md`.
+
 ## 2026-10-25 — Alpha.4 installation and native lifecycle QA
 
 Status: completed. The maintainer confirmed installation, coordinated rollback

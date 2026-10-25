@@ -1,3 +1,4 @@
+import { parseProviders } from "./lib/providers.mjs";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -75,7 +76,7 @@ function sessionRecord(provider, contract) {
   const blockers = [];
   const warnings = [];
 
-  if (provider.enabled !== "true") warnings.push({ subject: "enabled", detail: "Provider is disabled." });
+  if (provider.enabled !== true) warnings.push({ subject: "enabled", detail: "Provider is disabled." });
   if (provider.type === "cli" && !resolvedCommand) blockers.push({ subject: "command", detail: "CLI executable is not resolved." });
   if (provider.type === "cli" && contract?.status === "failed") blockers.push({ subject: "contract", detail: "Provider contract failed." });
   if (provider.type === "cli" && contract?.status === "warning") warnings.push({ subject: "contract", detail: "Provider contract has warnings." });
@@ -96,7 +97,7 @@ function sessionRecord(provider, contract) {
   }
   if (provider.runMode === "real" && provider.promptMode === "terminal") warnings.push({ subject: "terminal handoff", detail: "Human-operated terminal or PTY is required; DBC will stop before non-interactive execution." });
 
-  const status = provider.enabled !== "true"
+  const status = provider.enabled !== true
     ? "disabled"
     : blockers.length
       ? "blocked"
@@ -110,7 +111,7 @@ function sessionRecord(provider, contract) {
     id: provider.id,
     name: provider.name || provider.id,
     type: provider.type || "cli",
-    enabled: provider.enabled === "true",
+    enabled: provider.enabled === true,
     runMode: provider.runMode || "mock",
     providerKind,
     command: provider.command || "",
@@ -246,32 +247,6 @@ function semverAtLeast(version, minimum) {
     || (left[0] === right[0] && left[1] === right[1] && left[2] >= right[2]);
 }
 
-function parseProviders(text) {
-  const blocks = text.split(/\n  - id: /).slice(1);
-  return blocks.map((block) => {
-    const lines = block.split("\n");
-    const provider = { id: unquote(lines[0].trim()) };
-    let currentArray = "";
-    for (const line of lines.slice(1)) {
-      const arrayItem = line.match(/^      -\s*(.*)$/);
-      if (arrayItem && currentArray) {
-        provider[currentArray].push(unquote(arrayItem[1].trim()));
-        continue;
-      }
-      const match = line.match(/^    ([A-Za-z0-9_]+):\s*(.*)$/);
-      if (!match) continue;
-      currentArray = "";
-      if (match[2].trim() === "") {
-        currentArray = match[1];
-        provider[currentArray] = [];
-      } else {
-        provider[match[1]] = unquote(match[2].trim());
-      }
-    }
-    return provider;
-  });
-}
-
 function readJson(filePath) {
   if (!filePath || !existsSync(filePath)) return undefined;
   return JSON.parse(readFileSync(filePath, "utf8"));
@@ -317,10 +292,6 @@ function splitCommandLine(input) {
 
 function isExactPath(value) {
   return Boolean(value && (path.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value) || value.includes("/") || value.includes("\\")));
-}
-
-function unquote(value) {
-  return value.replace(/^["']|["']$/g, "");
 }
 
 function trim(value, length) {

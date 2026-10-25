@@ -39,6 +39,9 @@ jobs:
       - name: Provider adapter contract smoke
         run: pnpm provider-adapter-smoke
 
+      - name: Generic project readiness and YAML round-trip
+        run: pnpm project-readiness-smoke
+
       - name: MCP policy contract smoke
         run: pnpm mcp-policy-smoke
 

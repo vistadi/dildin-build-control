@@ -710,3 +710,96 @@ No runtime implementation, provider permissions or signing configuration changes
 Do not rewrite old tags, bypass checks or claim the debug QA bundle certifies every
 release binary. Verify published artifacts and checksums for both architectures.
 Installed alpha.3 and its private rollback snapshots remain untouched.
+
+## 2026-10-25 — Separate project task readiness from DBC distribution
+
+Status: accepted
+
+### Context
+
+The maintainer approved fixing the two blockers reproduced in the disposable
+alpha.4 README test, then repeating it within eight AI CLI calls. Native operator
+readiness required local DBC/Tauri packaging in arbitrary target projects, and
+Node helpers could not parse native-saved provider YAML. Adding `yaml` only to
+DBC's development dependencies was separately approved; no Git publication.
+
+### Decision
+
+Treat local distribution artifacts as informational in task readiness, while
+retaining independent release/signing/publishing checks. Preserve controlled
+baseline, provider contracts, bounded task/budget, matching operator approval,
+ledger and preflight gates. Share a strict YAML parser and structural profile
+serializer across Node helpers; reject malformed/ambiguous configuration.
+
+### Rationale
+
+An ordinary workspace should not need to build DBC to run a one-line task.
+Configuration data must survive native/CLI round trips without layout-dependent
+parsing or changes to unrelated provider metadata.
+
+### Affected modules and consequences
+
+Native operator checklist, Node readiness/plan/profile/report helpers, regression
+fixtures and CI. Adds `yaml` as a dev dependency, not to the frontend bundle.
+Supports an explicit validated micro-task file without silently raising budgets.
+Test-only QA bundle retains a separate app identifier; installed alpha.4 stays
+unchanged. No task approval grants publish, push, install or secret access.
+Live outcomes are recorded separately in the implementation worklog.
+
+## 2026-10-25 — Bind evidence and distinguish comparison from attestation
+
+Status: accepted
+
+### Context
+
+The real-provider example exposed unsubstantiated inter-step review, broad masking
+misreported as credential findings, and no native scope evidence without Git.
+The maintainer requested fixes/tests locally and prohibited new AI calls and Git
+publication. Historical failures must not be rewritten as successes.
+
+### Decision
+
+Use step evidence v2 and SHA-256 pins in SQLite, current-run input packets and exact
+citations for real QA/review/security/acceptance. Recheck input bytes after execution
+and the chain at acceptance. Treat broad/legacy masking as informational, retain
+typed blocking credential indicators, and deduplicate per source/kind. New non-Git
+runs capture a bounded pre-execution filesystem baseline pinned in SQLite; compare
+paths before/after execution. Missing, legacy or incomplete evidence stays blocked.
+
+### Rationale
+
+Step expectations, model prose and empty Git diffs cannot certify executed checks.
+Redaction is a display/safety measure, not independent proof of a credential leak.
+Native-owned pins prevent edited workspace reports from silently replacing the
+recorded identity, assuming the application database itself remains trusted.
+
+### Affected modules and consequences
+
+Native runtime, additive SQLite columns, evidence_handoff, secret_diagnostics,
+workspace_fingerprint and readiness documentation. Direct Rust SHA-256/regex
+dependencies reuse already locked versions; no new package download was needed.
+Old runs are readable but not silently upgraded to verified evidence. Sensitive
+files use metadata only, generated namespaces are excluded and scan bounds fail
+closed. Citations are not provider-tool-use attestation, and filesystem comparison
+is not a hostile-process sandbox or a transient-write journal. A separately approved
+new desktop/live fixture is needed; installed alpha.4 and failed evidence are intact.
+
+## 2026-10-25 — Publish verified readiness and evidence changes for review
+
+Status: accepted
+
+### Context and decision
+
+The maintainer explicitly requested commits of all verified readiness/evidence
+changes, a separate branch, push and a PR to main. This supersedes the earlier
+no-commit/no-push restriction for these changes, not the bans on new AI calls,
+merge, release or installed-app changes. Use `codex/readiness-evidence-integrity`,
+separate implementation groups and memory, and retain historical failed outcomes.
+
+### Rationale, affected modules and consequences
+
+Publish the tested work for CI/review without silently promoting it to production.
+Affects Git publication and persistent project memory only; runtime contracts
+remain the two accepted decisions above. No force-push, amended history, auto-merge,
+tag, release dispatch or new model invocation. Record actual commit/PR identities
+and leave merge/release for separate authorization.

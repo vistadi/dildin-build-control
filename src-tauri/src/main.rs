@@ -11,10 +11,13 @@ use std::{sync::mpsc, thread};
 use tauri::Manager;
 
 mod build_info;
+mod evidence_handoff;
 mod harness;
 mod loop_lifecycle;
 mod process_runner;
 mod provider_checks;
+mod secret_diagnostics;
+mod workspace_fingerprint;
 
 #[derive(Serialize)]
 struct EnvironmentCheck {
@@ -431,6 +434,7 @@ struct LoopRunSnapshot {
     task_budget_limit: f64,
     task_spec_path: String,
     task_spec_checksum: String,
+    scope_baseline_checksum: String,
     memory_context: String,
     memory_refs: Vec<String>,
     steps: Vec<LoopStepSnapshot>,
@@ -464,6 +468,7 @@ struct LoopStepSnapshot {
     structured_report_json: String,
     artifact_path: String,
     evidence_path: String,
+    evidence_checksum: String,
     started_at: String,
     finished_at: String,
 }
@@ -491,6 +496,8 @@ struct StepStructuredReport {
     actions: Vec<String>,
     files_touched: Vec<String>,
     evidence: Vec<String>,
+    #[serde(default)]
+    evidence_refs: Vec<evidence_handoff::EvidenceRef>,
     risks: Vec<String>,
     next_action: String,
 }
@@ -2238,10 +2245,11 @@ fn execute_cli_provider(request: CliRunRequest) -> CliRunResult {
             if status != "success" {
                 stream_report["outcome"] = serde_json::json!("failed");
             }
+            secret_diagnostics::redact_value(&mut stream_report);
             CliRunResult {
                 status: status.to_string(),
-                stdout,
-                stderr,
+                stdout: redact_text(&stdout),
+                stderr: redact_text(&stderr),
                 exit_code: output.status.code(),
                 duration_ms: started.elapsed().as_millis(),
                 decision: "allow".to_string(),
@@ -2488,6 +2496,8 @@ fn start_loop_run(
 
     let run = read_loop_run(&conn, &loop_id)?;
     let snapshot = build_loop_snapshot(&conn, run)?;
+    pin_initial_baseline(&conn, &snapshot)?;
+    let snapshot = build_loop_snapshot(&conn, read_loop_run(&conn, &loop_id)?)?;
     if !request.routing_simulation.is_null() {
         let routing_evidence_dir = PathBuf::from(&snapshot.project_path)
             .join(".dbc")
@@ -2788,6 +2798,7 @@ fn advance_loop_in_db(
 
     let active = run.active_step_index;
     let current_step = read_loop_step(&conn, &loop_id, active)?;
+    let before = build_loop_snapshot(conn, read_loop_run(conn, &loop_id)?)?;
     let budget_result = budget_guard_execution(&conn, &run, &current_step)?;
     if !loop_lifecycle::claim_step(&conn, &loop_id, active)? {
         let current = read_loop_run(conn, &loop_id)?;
@@ -2796,7 +2807,28 @@ fn advance_loop_in_db(
         }
         return build_loop_snapshot(conn, current);
     }
-    let execution = budget_result.unwrap_or_else(|| execute_loop_step(&run, &current_step));
+    let mut execution = budget_result.unwrap_or_else(|| {
+        let gate = scope_gate_for_snapshot(&before, &collect_git_evidence(&run.project_path));
+        if step_has_effects(&current_step) && gate["passed"] != true {
+            return evidence_blocked(
+                "Workspace scope is unverified or has disallowed changes; no process was started.",
+            );
+        }
+        execute_loop_step(&run, &current_step, &before.steps)
+    });
+    let after_scope = scope_gate_for_snapshot(&before, &collect_git_evidence(&run.project_path));
+    if execution.status == "passed"
+        && step_has_effects(&current_step)
+        && after_scope["passed"] != true
+    {
+        execution.report.verdict = "request_changes".into();
+        execution
+            .report
+            .risks
+            .push("Workspace scope comparison failed after execution.".into());
+        execution.report.next_action = "request_changes".into();
+        execution.status = "failed".into();
+    }
     let output = execution.output;
     let structured_report_json =
         serde_json::to_string_pretty(&execution.report).map_err(|err| err.to_string())?;
@@ -2834,9 +2866,10 @@ fn advance_loop_in_db(
     tx.execute(
         "update loop_steps
          set status = ?1, output = ?2, structured_report_json = ?3, artifact_path = ?4, evidence_path = ?5, finished_at = datetime('now'),
-             requires_approval = ?6, last_error = ?7
+             requires_approval = ?6, last_error = ?7, evidence_checksum = ?10
          where loop_id = ?8 and step_index = ?9",
-        params![execution.status, output, structured_report_json, artifact_path, evidence_path, requires_approval, last_error, loop_id, active],
+        params![execution.status, output, structured_report_json, artifact_path, evidence_path, requires_approval, last_error, loop_id, active,
+            workspace_fingerprint::digest(&fs::read(&evidence_path).map_err(|_| "Cannot pin written evidence")?)],
     )
         .map_err(|err| err.to_string())?;
 
@@ -3529,6 +3562,9 @@ fn generate_release_package(
 ) -> Result<ReleasePackageResult, String> {
     let project = PathBuf::from(&request.project_path);
     let tauri_config_path = project.join("src-tauri").join("tauri.conf.json");
+    if !tauri_config_path.exists() {
+        return Err("This project has no Tauri distribution configuration. A release package is optional for task execution; use the project readiness checklist instead.".to_string());
+    }
     let tauri_config_text =
         fs::read_to_string(&tauri_config_path).map_err(|err| err.to_string())?;
     let tauri_config: serde_json::Value =
@@ -3694,7 +3730,7 @@ fn generate_operator_checklist(
     operator_check_readiness(&readiness, &mut checks, &mut blockers, &mut warnings);
     operator_check_real_plan(&real_plan, &mut checks, &mut blockers);
     operator_check_comparison(&comparison, &mut checks, &mut blockers, &mut warnings);
-    operator_check_release(&release, &mut checks, &mut blockers);
+    operator_distribution_evidence(&release, &mut checks);
     operator_check_providers(&providers, &mut checks, &mut blockers);
 
     let active_real_providers: Vec<serde_json::Value> = providers
@@ -3805,15 +3841,14 @@ fn generate_operator_checklist(
         }),
         serde_json::json!({
             "id": "review-reports",
-            "title": "Review readiness, plan, comparison, and release evidence",
+            "title": "Review project readiness, plan and comparison",
             "files": [
                 readiness_path.display().to_string(),
                 real_plan_path.display().to_string(),
-                comparison_path.display().to_string(),
-                release_path.display().to_string()
+                comparison_path.display().to_string()
             ],
             "expectedEvidence": "No blockers; warnings are understood by the operator.",
-            "stopIf": "Any report is missing, blocked, or refers to a stale task/release."
+            "stopIf": "A required project report is missing, blocked, or refers to a stale task. Distribution evidence is informational."
         }),
         serde_json::json!({
             "id": "apply-real-profile",
@@ -5606,32 +5641,10 @@ fn summarize_step_error(status: &str, output: &str) -> String {
 }
 
 fn redact_text(text: &str) -> String {
-    text.lines()
-        .map(|line| {
-            let lowered = line.to_lowercase();
-            if lowered.contains("api_key")
-                || lowered.contains("apikey")
-                || lowered.contains("authorization:")
-                || lowered.contains("bearer ")
-                || lowered.contains("password")
-                || lowered.contains("private key")
-                || lowered.contains("secret")
-                || lowered.contains("api_token")
-                || lowered.contains("access_token")
-                || lowered.contains("refresh_token")
-                || lowered.contains("auth token")
-                || lowered.contains("token:")
-                || lowered.contains("token=")
-            {
-                "[REDACTED SECRET-LIKE LINE]".to_string()
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    secret_diagnostics::redact(text)
 }
 
+#[derive(Default)]
 struct LoopRunRow {
     id: String,
     project_id: String,
@@ -5644,6 +5657,7 @@ struct LoopRunRow {
     task_budget_limit: f64,
     task_spec_path: String,
     task_spec_checksum: String,
+    scope_baseline_checksum: String,
     memory_context: String,
     memory_refs: Vec<String>,
     status: String,
@@ -5654,7 +5668,7 @@ struct LoopRunRow {
 fn read_loop_run(conn: &Connection, loop_id: &str) -> Result<LoopRunRow, String> {
     conn.query_row(
         "select id, project_id, task_id, project_path, task_title, task_brief, task_criteria_json, task_constraints_json,
-                task_budget_limit, task_spec_path, task_spec_checksum, memory_context, memory_refs_json, status, active_step_index, artifact_dir
+                task_budget_limit, task_spec_path, task_spec_checksum, memory_context, memory_refs_json, status, active_step_index, artifact_dir, scope_baseline_checksum
          from loop_runs where id = ?1",
         params![loop_id],
         |row| {
@@ -5678,6 +5692,7 @@ fn read_loop_run(conn: &Connection, loop_id: &str) -> Result<LoopRunRow, String>
                 status: row.get(13)?,
                 active_step_index: row.get(14)?,
                 artifact_dir: row.get(15)?,
+                scope_baseline_checksum: row.get(16)?,
             })
         },
     )
@@ -5693,7 +5708,7 @@ fn read_loop_step(
         "select step_id, state, agent, role_id, provider_id, provider_type, provider_command, provider_args_template,
                 provider_prompt_mode, provider_run_mode, agent_mode, local_commands_json, timeout_seconds, max_output_bytes,
                 max_attempts, attempt_count, requires_approval, last_error, summary, evidence, status, output,
-                structured_report_json, artifact_path, evidence_path, started_at, finished_at
+                structured_report_json, artifact_path, evidence_path, started_at, finished_at, evidence_checksum
          from loop_steps where loop_id = ?1 and step_index = ?2",
         params![loop_id, step_index],
         |row| {
@@ -5726,6 +5741,7 @@ fn read_loop_step(
                 evidence_path: row.get(24)?,
                 started_at: row.get(25)?,
                 finished_at: row.get(26)?,
+                evidence_checksum: row.get(27)?,
             })
         },
     )
@@ -5757,7 +5773,7 @@ fn build_loop_snapshot(conn: &Connection, run: LoopRunRow) -> Result<LoopRunSnap
             "select step_id, state, agent, role_id, provider_id, provider_type, provider_command, provider_args_template,
                     provider_prompt_mode, provider_run_mode, agent_mode, local_commands_json, timeout_seconds, max_output_bytes,
                     max_attempts, attempt_count, requires_approval, last_error, summary, evidence, status, output,
-                    structured_report_json, artifact_path, evidence_path, started_at, finished_at
+                    structured_report_json, artifact_path, evidence_path, started_at, finished_at, evidence_checksum
              from loop_steps where loop_id = ?1 order by step_index",
         )
         .map_err(|err| err.to_string())?;
@@ -5792,6 +5808,7 @@ fn build_loop_snapshot(conn: &Connection, run: LoopRunRow) -> Result<LoopRunSnap
                 evidence_path: row.get(24)?,
                 started_at: row.get(25)?,
                 finished_at: row.get(26)?,
+                evidence_checksum: row.get(27)?,
             })
         })
         .map_err(|err| err.to_string())?;
@@ -5808,6 +5825,7 @@ fn build_loop_snapshot(conn: &Connection, run: LoopRunRow) -> Result<LoopRunSnap
         task_budget_limit: run.task_budget_limit,
         task_spec_path: run.task_spec_path,
         task_spec_checksum: run.task_spec_checksum,
+        scope_baseline_checksum: run.scope_baseline_checksum,
         memory_context: run.memory_context,
         memory_refs: run.memory_refs,
         status: run.status,
@@ -6074,14 +6092,52 @@ fn loop_security_report_path(project_path: &str, loop_id: &str) -> PathBuf {
         .join(format!("{}.json", sanitize_file_stem(loop_id)))
 }
 
+fn pin_initial_baseline(conn: &Connection, snapshot: &LoopRunSnapshot) -> Result<(), String> {
+    if snapshot.active_step_index != 0
+        || snapshot.steps.iter().any(|s| s.attempt_count != 0)
+        || !snapshot.scope_baseline_checksum.is_empty()
+        || Path::new(&snapshot.git_baseline_path).exists()
+    {
+        return Err("Cannot replace or retrospectively capture a scope baseline".into());
+    }
+    ensure_git_baseline(snapshot)?;
+    let bytes = workspace_fingerprint::read_bounded(
+        Path::new(&snapshot.project_path),
+        Path::new(&snapshot.git_baseline_path)
+            .strip_prefix(&snapshot.project_path)
+            .map_err(|_| "Invalid baseline path")?,
+        16 * 1024 * 1024,
+    )?;
+    conn.execute("update loop_runs set scope_baseline_checksum = ?1 where id = ?2 and scope_baseline_checksum = ''",
+        params![workspace_fingerprint::digest(&bytes), snapshot.id]).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
 fn ensure_git_baseline(snapshot: &LoopRunSnapshot) -> Result<(), String> {
     let path = PathBuf::from(&snapshot.git_baseline_path);
     if path.exists() {
         return Ok(());
     }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-    }
+    workspace_fingerprint::safe_parent(
+        Path::new(&snapshot.project_path),
+        path.strip_prefix(&snapshot.project_path)
+            .map_err(|_| "Invalid baseline path")?,
+    )?;
+    let git = collect_git_evidence(&snapshot.project_path);
+    let before_execution = snapshot.active_step_index == 0
+        && snapshot.status == "running"
+        && snapshot.steps.iter().all(|step| step.attempt_count == 0);
+    let file_snapshot = if git["isGitRepo"] != true && before_execution {
+        let denied = read_json_optional(Path::new(&snapshot.task_spec_path))
+            .map(|v| json_string_array(&v, "deniedPaths"))
+            .unwrap_or_default();
+        Some(workspace_fingerprint::capture(
+            Path::new(&snapshot.project_path),
+            &denied,
+        ))
+    } else {
+        None
+    };
     let content = serde_json::to_string_pretty(&serde_json::json!({
         "version": 1,
         "kind": "git-baseline",
@@ -6090,7 +6146,9 @@ fn ensure_git_baseline(snapshot: &LoopRunSnapshot) -> Result<(), String> {
         "taskId": snapshot.task_id,
         "taskTitle": snapshot.task_title,
         "projectPath": snapshot.project_path,
-        "git": collect_git_evidence(&snapshot.project_path),
+        "git": git,
+        "taskSpecChecksum": snapshot.task_spec_checksum,
+        "fileSnapshot": file_snapshot,
         "policy": {
             "branchCreation": "manual",
             "commit": "manual",
@@ -6099,7 +6157,13 @@ fn ensure_git_baseline(snapshot: &LoopRunSnapshot) -> Result<(), String> {
         }
     }))
     .map_err(|err| err.to_string())?;
-    fs::write(&path, content).map_err(|err| err.to_string())
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|err| err.to_string())?;
+    file.write_all(content.as_bytes())
+        .map_err(|err| err.to_string())
 }
 
 fn write_git_workspace_package(snapshot: &LoopRunSnapshot) -> Result<(), String> {
@@ -6111,7 +6175,7 @@ fn write_git_workspace_package(snapshot: &LoopRunSnapshot) -> Result<(), String>
     }
 
     let git = collect_git_evidence(&snapshot.project_path);
-    let scope_gate = scope_gate_from_git(&snapshot.task_spec_path, &git);
+    let scope_gate = scope_gate_for_snapshot(snapshot, &git);
     let is_git_repo = git
         .get("isGitRepo")
         .and_then(|value| value.as_bool())
@@ -6120,7 +6184,7 @@ fn write_git_workspace_package(snapshot: &LoopRunSnapshot) -> Result<(), String>
         .get("branch")
         .and_then(|value| value.as_str())
         .unwrap_or("unknown");
-    let changed_files = git
+    let changed_files = scope_gate
         .get("changedFiles")
         .and_then(|value| value.as_array())
         .map(|items| {
@@ -6208,7 +6272,8 @@ fn write_commit_proposal(snapshot: &LoopRunSnapshot) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
     let git = collect_git_evidence(&snapshot.project_path);
-    let changed_files = git
+    let scope_gate = scope_gate_for_snapshot(snapshot, &git);
+    let changed_files = scope_gate
         .get("changedFiles")
         .and_then(|value| value.as_array())
         .map(|items| {
@@ -6245,11 +6310,23 @@ fn write_commit_proposal(snapshot: &LoopRunSnapshot) -> Result<(), String> {
         "## Changed Files".to_string(),
     ];
     if changed_files.is_empty() {
-        lines.push("- No tracked diff files detected yet.".to_string());
+        lines.push(
+            if scope_gate["verified"].as_bool().unwrap_or(false) {
+                "- No changed paths detected by the scope comparison."
+            } else {
+                "- Changes are unverified; an empty Git diff is not proof of no changes."
+            }
+            .to_string(),
+        );
     } else {
         for file in changed_files {
             lines.push(format!("- {file}"));
         }
+    }
+    if !git["isGitRepo"].as_bool().unwrap_or(false) {
+        lines.push(String::new());
+        lines.push("No Git repository: the path list uses filesystem comparison evidence. Git commands are unavailable; no commit is proposed.".into());
+        return fs::write(&path, lines.join("\n")).map_err(|err| err.to_string());
     }
     lines.extend([
         String::new(),
@@ -6341,6 +6418,10 @@ fn write_security_report(snapshot: &LoopRunSnapshot) -> Result<(), String> {
             "passed": findings.is_empty()
         },
         "findings": findings,
+        "redactionEvents": snapshot.steps.iter().map(|step| serde_json::json!({
+            "stepId":step.id,"maskedLines":secret_diagnostics::masking_events(&step.output),
+            "classification":"informational_not_credential_evidence"
+        })).collect::<Vec<_>>(),
     }))
     .map_err(|err| err.to_string())?;
     fs::write(&path, content).map_err(|err| err.to_string())
@@ -6386,35 +6467,15 @@ fn collect_loop_secret_findings(snapshot: &LoopRunSnapshot) -> Vec<SecretFinding
 }
 
 fn scan_text_for_secret_findings(source: &str, text: &str) -> Vec<SecretFinding> {
-    let patterns = [
-        ("openai-api-key", "openai_api_key"),
-        ("anthropic-api-key", "anthropic_api_key"),
-        ("aws-secret-access-key", "aws_secret_access_key"),
-        ("authorization-bearer", "authorization: bearer"),
-        ("api-key-assignment", "api_key="),
-        ("api-key-header", "api-key:"),
-        ("access-token-assignment", "access_token="),
-        ("refresh-token-assignment", "refresh_token="),
-        ("token-assignment", "token="),
-        ("password-assignment", "password="),
-        ("private-key-assignment", "private_key="),
-        ("pem-private-key", "-----begin"),
-        ("openai-secret-prefix", "sk-"),
-        ("github-token", "ghp_"),
-        ("github-pat", "github_pat_"),
-        ("slack-token", "xoxb-"),
-        ("redacted-secret-line", "[redacted secret-like line]"),
-    ];
-
     let mut findings = Vec::new();
+    let mut seen = BTreeSet::new();
     for (index, line) in text.lines().enumerate() {
-        let lowered = line.to_lowercase();
-        for (kind, needle) in patterns {
-            if lowered.contains(needle) {
+        for kind in secret_diagnostics::kinds(line) {
+            if seen.insert(kind.clone()) {
                 findings.push(SecretFinding {
                     source: source.to_string(),
                     line: index + 1,
-                    kind: kind.to_string(),
+                    kind,
                     severity: "high".to_string(),
                 });
             }
@@ -6437,7 +6498,7 @@ fn write_acceptance_package(snapshot: &LoopRunSnapshot) -> Result<(), String> {
     let gates = acceptance_gates(snapshot);
     let verdict = acceptance_verdict(snapshot, &gates);
     let git = collect_git_evidence(&snapshot.project_path);
-    let scope_gate = scope_gate_from_git(&snapshot.task_spec_path, &git);
+    let scope_gate = scope_gate_for_snapshot(snapshot, &git);
     let ops_evidence = loop_ops_evidence_snapshot(snapshot);
     let steps = snapshot
         .steps
@@ -6552,7 +6613,7 @@ fn acceptance_gates(snapshot: &LoopRunSnapshot) -> serde_json::Value {
     let real_provider_budget_ok =
         real_provider_limit <= 0 || real_provider_calls_used <= real_provider_limit;
     let git = collect_git_evidence(&snapshot.project_path);
-    let scope_gate = scope_gate_from_git(&snapshot.task_spec_path, &git);
+    let scope_gate = scope_gate_for_snapshot(snapshot, &git);
     let scope_passed = scope_gate
         .get("passed")
         .and_then(|value| value.as_bool())
@@ -6609,6 +6670,7 @@ fn acceptance_gates(snapshot: &LoopRunSnapshot) -> serde_json::Value {
 
     serde_json::json!({
         "allStepsPassed": all_steps_passed,
+        "evidenceIntegrity": evidence_handoff::snapshot_valid(snapshot),
         "hasArtifacts": has_artifacts,
         "hasEvidenceFiles": has_evidence,
         "hasStructuredReports": has_structured,
@@ -6631,6 +6693,18 @@ fn acceptance_gates(snapshot: &LoopRunSnapshot) -> serde_json::Value {
 
 fn acceptance_verdict(snapshot: &LoopRunSnapshot, gates: &serde_json::Value) -> String {
     if snapshot.status == "completed"
+        && gates
+            .get("evidenceIntegrity")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        && gates
+            .get("scopeVerified")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        && gates
+            .get("realProviderBudgetOk")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
         && gates
             .get("allStepsPassed")
             .and_then(|value| value.as_bool())
@@ -6721,7 +6795,7 @@ fn acceptance_markdown(
     }
 
     let git = collect_git_evidence(&snapshot.project_path);
-    let scope_gate = scope_gate_from_git(&snapshot.task_spec_path, &git);
+    let scope_gate = scope_gate_for_snapshot(snapshot, &git);
     lines.extend([String::new(), "## Scope Gate".to_string()]);
     for key in [
         "mode",
@@ -6841,9 +6915,16 @@ fn write_step_evidence(
     ));
     archive_previous_attempt(&path, step.attempt_count)?;
     let git = collect_git_evidence(&run.project_path);
-    let scope_gate = scope_gate_from_git(&run.task_spec_path, &git);
+    let scope_gate = scope_gate_for_run(run, &git);
+    let artifact_bytes = workspace_fingerprint::read_bounded(
+        Path::new(&run.project_path),
+        Path::new(artifact_path)
+            .strip_prefix(&run.project_path)
+            .map_err(|_| "Invalid artifact path")?,
+        2 * 1024 * 1024,
+    )?;
     let content = serde_json::to_string_pretty(&serde_json::json!({
-        "version": 1,
+        "version": 2,
         "loopId": loop_id,
         "taskId": run.task_id,
         "taskTitle": run.task_title,
@@ -6862,6 +6943,7 @@ fn write_step_evidence(
         "attemptCount": step.attempt_count + 1,
         "maxAttempts": step.max_attempts,
         "artifactPath": artifact_path,
+        "artifactSha256": workspace_fingerprint::digest(&artifact_bytes),
         "outputExcerpt": trim_output(output, 6000),
         "git": git,
         "scopeGate": scope_gate,
@@ -7015,6 +7097,7 @@ fn budget_guard_execution(
                 "Real provider call budget: {used}/{limit}; step {} was not executed.",
                 step.id
             )],
+            evidence_refs: Vec::new(),
             risks: vec!["Prevented unbounded model/provider execution.".to_string()],
             next_action: "Adjust budgetLimit or reduce provider calls, then retry deliberately."
                 .to_string(),
@@ -7041,7 +7124,25 @@ fn real_provider_calls_used(conn: &Connection, loop_id: &str) -> Result<i64, Str
     .map_err(|err| err.to_string())
 }
 
-fn execute_loop_step(run: &LoopRunRow, step: &LoopStepSnapshot) -> StepExecution {
+fn step_has_effects(step: &LoopStepSnapshot) -> bool {
+    step.provider_type == "local_runner"
+        || step.agent_mode == "command_runner"
+        || (step.provider_type == "cli" && step.provider_run_mode == "real")
+}
+
+fn evidence_blocked(reason: &str) -> StepExecution {
+    StepExecution {
+        status: "blocked".into(),
+        output: reason.into(),
+        report: fallback_report_from_status("blocked", reason),
+    }
+}
+
+fn execute_loop_step(
+    run: &LoopRunRow,
+    step: &LoopStepSnapshot,
+    steps: &[LoopStepSnapshot],
+) -> StepExecution {
     if step.provider_type == "local_runner" || step.agent_mode == "command_runner" {
         return execute_local_commands(run, step);
     }
@@ -7058,7 +7159,20 @@ fn execute_loop_step(run: &LoopRunRow, step: &LoopStepSnapshot) -> StepExecution
         };
     }
 
-    let prompt = build_backend_prompt(run, step);
+    let packet = match evidence_handoff::prepare(run, step, steps) {
+        Ok(packet) => packet,
+        Err(error) => {
+            return evidence_blocked(&format!("Current-run evidence is not ready: {error}"))
+        }
+    };
+    if let Err(error) = evidence_handoff::save(Path::new(&run.project_path), &packet) {
+        return evidence_blocked(&error);
+    }
+    let prompt = format!(
+        "{}\n\n{}",
+        build_backend_prompt(run, step),
+        evidence_handoff::prompt(&packet, evidence_handoff::requires_citations(step))
+    );
     let prompt_findings = scan_text_for_secret_findings("cli.prompt", &prompt);
     if !prompt_findings.is_empty() {
         let output = format!(
@@ -7076,6 +7190,7 @@ fn execute_loop_step(run: &LoopRunRow, step: &LoopStepSnapshot) -> StepExecution
                 ],
                 files_touched: Vec::new(),
                 evidence: vec!["Prompt secret scan ran before CLI execution.".to_string()],
+                evidence_refs: Vec::new(),
                 risks: vec!["Potential secret exposure prevented.".to_string()],
                 next_action:
                     "Remove secret-like values or replace them with references before retry."
@@ -7115,7 +7230,19 @@ fn execute_loop_step(run: &LoopRunRow, step: &LoopStepSnapshot) -> StepExecution
         },
     };
     let result = execute_cli_provider(request);
-    let report = report_from_cli_result(&result);
+    let mut report = report_from_cli_result(&result);
+    if status_from_report(&report) == "passed" {
+        if let Err(error) = evidence_handoff::validate(
+            Path::new(&run.project_path),
+            &packet,
+            &report.evidence_refs,
+            evidence_handoff::requires_citations(step),
+        ) {
+            report.verdict = "request_changes".into();
+            report.risks.push(error);
+            report.next_action = "request_changes".into();
+        }
+    }
     StepExecution {
         status: status_from_report(&report),
         output: result.redacted_output,
@@ -7264,6 +7391,10 @@ fn parse_structured_report(output: &str) -> Option<StepStructuredReport> {
         actions: json_string_array(&value, "actions"),
         files_touched: json_string_array(&value, "filesTouched"),
         evidence: json_string_array(&value, "evidence"),
+        evidence_refs: match value.get("evidenceRefs") {
+            Some(refs) => serde_json::from_value(refs.clone()).ok()?,
+            None => Vec::new(),
+        },
         risks: json_string_array(&value, "risks"),
         next_action: value
             .get("nextAction")
@@ -7287,6 +7418,7 @@ fn fallback_report_from_status(status: &str, output: &str) -> StepStructuredRepo
         actions: Vec::new(),
         files_touched: Vec::new(),
         evidence: Vec::new(),
+        evidence_refs: Vec::new(),
         risks: if verdict == "pass" {
             Vec::new()
         } else {
@@ -7404,7 +7536,7 @@ fn build_backend_prompt(run: &LoopRunRow, step: &LoopStepSnapshot) -> String {
     }
 
     format!(
-        "DBC role: {}\nMode: {}\nStep: {}\nProject path: {}\nTask: {} - {}\nTask spec: {}#{}\nBudget limit: {} budget unit(s); DBC allows up to {} real CLI call(s) for this loop.\n\nBrief:\n{}\n\nAcceptance criteria:\n{}\n\nConstraints:\n{}\n\nTask scope:\n{}\n\nProject memory:\n{}\n\nStep expectation:\n{}\n\nEvidence so far:\n{}\n\nPerform this loop step against the current task. Do not mark success from placeholder text alone.\n\nReturn exactly one JSON object and no prose. Schema:\n{{\"verdict\":\"pass|request_changes|approval_required|fail\",\"summary\":\"what happened and why\",\"actions\":[\"action performed or checked\"],\"filesTouched\":[\"path or empty if none\"],\"evidence\":[\"artifact, command, diff, or check\"],\"risks\":[\"risk or blocker\"],\"nextAction\":\"continue|retry|request_changes|approval\"}}",
+        "DBC role: {}\nMode: {}\nStep: {}\nProject path: {}\nTask: {} - {}\nTask spec: {}#{}\nBudget limit: {} budget unit(s); DBC allows up to {} real CLI call(s) for this loop.\n\nBrief:\n{}\n\nAcceptance criteria:\n{}\n\nConstraints:\n{}\n\nTask scope:\n{}\n\nProject memory:\n{}\n\nStep expectation:\n{}\n\nExpected evidence (not proof of execution):\n{}\n\nPerform this loop step against the current task. Do not mark success from placeholder text alone.\n\nReturn exactly one JSON object and no prose. Schema:\n{{\"verdict\":\"pass|request_changes|approval_required|fail\",\"summary\":\"what happened and why\",\"actions\":[\"action performed or checked\"],\"filesTouched\":[\"path or empty if none\"],\"evidence\":[\"artifact, command, diff, or check\"],\"evidenceRefs\":[],\"risks\":[\"risk or blocker\"],\"nextAction\":\"continue|retry|request_changes|approval\"}}",
         step.agent,
         step.agent_mode,
         step.state,
@@ -7463,6 +7595,114 @@ fn task_scope_from_spec(task_spec_path: &str) -> String {
         ),
     ]
     .join("\n")
+}
+
+fn scope_gate_for_snapshot(
+    snapshot: &LoopRunSnapshot,
+    git: &serde_json::Value,
+) -> serde_json::Value {
+    scope_gate_for_workspace(
+        &snapshot.project_path,
+        &snapshot.task_spec_path,
+        &snapshot.id,
+        &snapshot.scope_baseline_checksum,
+        git,
+    )
+}
+
+fn scope_gate_for_run(run: &LoopRunRow, git: &serde_json::Value) -> serde_json::Value {
+    scope_gate_for_workspace(
+        &run.project_path,
+        &run.task_spec_path,
+        &run.id,
+        &run.scope_baseline_checksum,
+        git,
+    )
+}
+
+fn scope_gate_for_workspace(
+    project: &str,
+    task: &str,
+    loop_id: &str,
+    pinned: &str,
+    git: &serde_json::Value,
+) -> serde_json::Value {
+    if git["isGitRepo"] == true {
+        return scope_gate_from_git(task, git);
+    }
+    let compared = (|| -> Result<Vec<String>, String> {
+        if pinned.is_empty() {
+            return Err(
+                "No pre-execution baseline pinned in SQLite; historical runs remain unverified"
+                    .into(),
+            );
+        }
+        let root = Path::new(project);
+        let baseline_path = loop_git_baseline_path(project, loop_id);
+        let relative = baseline_path
+            .strip_prefix(root)
+            .map_err(|_| "Invalid baseline path")?;
+        let bytes = workspace_fingerprint::read_bounded(root, relative, 16 * 1024 * 1024)?;
+        if workspace_fingerprint::digest(&bytes) != pinned {
+            return Err("Baseline checksum differs from SQLite".into());
+        }
+        let baseline: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|_| "Invalid baseline JSON")?;
+        if baseline["loopId"] != loop_id || baseline["projectPath"] != project {
+            return Err("Baseline belongs to another run/workspace".into());
+        }
+        let task_bytes = workspace_fingerprint::read_bounded(
+            root,
+            Path::new(task)
+                .strip_prefix(root)
+                .map_err(|_| "Task is outside workspace")?,
+            1024 * 1024,
+        )?;
+        let task_text = std::str::from_utf8(&task_bytes).map_err(|_| "Invalid task encoding")?;
+        if baseline["taskSpecChecksum"] != stable_checksum(task_text) {
+            return Err("Task scope changed since baseline".into());
+        }
+        let spec: serde_json::Value =
+            serde_json::from_slice(&task_bytes).map_err(|_| "Invalid task scope")?;
+        let paths = [
+            json_string_array(&spec, "allowedPaths"),
+            json_string_array(&spec, "deniedPaths"),
+        ]
+        .concat();
+        if paths.iter().any(|p| {
+            p.is_empty()
+                || p.contains('\\')
+                || Path::new(p)
+                    .components()
+                    .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        }) {
+            return Err("Task scope contains unsafe paths".into());
+        }
+        let before: workspace_fingerprint::Snapshot =
+            serde_json::from_value(baseline["fileSnapshot"].clone())
+                .map_err(|_| "No compatible pre-execution file snapshot")?;
+        let after = workspace_fingerprint::capture(root, &json_string_array(&spec, "deniedPaths"));
+        workspace_fingerprint::changed(&before, &after)
+    })();
+    match compared {
+        Ok(changed) => {
+            let mut result = scope_gate_from_git(
+                task,
+                &serde_json::json!({"isGitRepo":true,"changedFiles":changed}),
+            );
+            result["mode"] = serde_json::json!("filesystem_fingerprint");
+            result["baselineSha256"] = serde_json::json!(pinned);
+            result["limitations"] = serde_json::json!(["Comparison is not a sandbox or transient-write journal.","Denied/sensitive files use metadata only; DBC-generated evidence namespaces are excluded and checked separately."]);
+            result
+        }
+        Err(reason) => {
+            let mut result = scope_gate_from_git(task, git);
+            result["passed"] = serde_json::json!(false);
+            result["verified"] = serde_json::json!(false);
+            result["reason"] = serde_json::json!(reason);
+            result
+        }
+    }
 }
 
 fn scope_gate_from_git(task_spec_path: &str, git: &serde_json::Value) -> serde_json::Value {
@@ -8471,40 +8711,21 @@ fn operator_check_comparison(
     }
 }
 
-fn operator_check_release(
+fn operator_distribution_evidence(
     value: &Option<serde_json::Value>,
     checks: &mut Vec<serde_json::Value>,
-    blockers: &mut Vec<serde_json::Value>,
 ) {
-    let Some(report) = value else {
-        operator_fail(blockers, checks, "release", "Release package is missing.");
-        return;
-    };
-    let failed = report
-        .get("checklist")
+    let complete = value
+        .as_ref()
+        .and_then(|report| report.get("checklist"))
         .and_then(|value| value.as_object())
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|(key, value)| (value != true).then_some(key.to_string()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|| vec!["checklist".to_string()]);
-    if failed.is_empty() {
-        let checksum = report
-            .get("checksums")
-            .and_then(|value| value.get("dmg"))
-            .and_then(|value| value.as_str())
-            .unwrap_or("missing");
-        operator_pass(checks, "release", &format!("Release checksum {checksum}."));
+        .is_some_and(|items| !items.is_empty() && items.values().all(|value| value == true));
+    let detail = if complete {
+        "Local distribution artifacts are recorded; this is not a task execution or signing approval."
     } else {
-        operator_fail(
-            blockers,
-            checks,
-            "release",
-            &format!("Release checklist has failing items: {}", failed.join(", ")),
-        );
-    }
+        "No complete local distribution package. Not required for project tasks; publishing/signing remain separately gated."
+    };
+    checks.push(serde_json::json!({"level": "info", "subject": "distribution (informational)", "detail": detail}));
 }
 
 fn operator_check_providers(
@@ -10130,6 +10351,7 @@ fn ensure_loop_run_columns(conn: &Connection) -> Result<(), String> {
         ("task_budget_limit", "real not null default 0"),
         ("task_spec_path", "text not null default ''"),
         ("task_spec_checksum", "text not null default ''"),
+        ("scope_baseline_checksum", "text not null default ''"),
         ("memory_context", "text not null default ''"),
         ("memory_refs_json", "text not null default '[]'"),
     ];
@@ -10164,6 +10386,7 @@ fn ensure_loop_step_columns(conn: &Connection) -> Result<(), String> {
         ("last_error", "text not null default ''"),
         ("structured_report_json", "text not null default ''"),
         ("evidence_path", "text not null default ''"),
+        ("evidence_checksum", "text not null default ''"),
     ];
 
     for (name, definition) in columns {
@@ -10445,6 +10668,281 @@ mod tests {
 
     static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+    fn insert_fixture_loop(conn: &Connection, id: &str, root: &Path) {
+        conn.execute("insert into loop_runs (id,project_id,task_id,project_path,status,active_step_index,artifact_dir,created_at,updated_at,task_budget_limit)
+            values (?1,'fixture','TASK',?2,'running',0,?3,'','',2)", params![id,root.display().to_string(),root.join(".dbc/artifacts").join(id).display().to_string()]).unwrap();
+    }
+
+    fn insert_fixture_step(
+        conn: &Connection,
+        id: &str,
+        index: i64,
+        name: &str,
+        state: &str,
+        kind: &str,
+        commands: Vec<String>,
+    ) {
+        conn.execute("insert into loop_steps (loop_id,step_index,step_id,state,agent,role_id,provider_id,provider_type,provider_run_mode,provider_command,provider_args_template,local_commands_json,summary,evidence,status,timeout_seconds,max_attempts)
+            values (?1,?2,?3,?4,'fixture','fixture','fixture',?5,'real','/bin/cat','.dbc/evidence/fixture-response.json',?6,'expectation only','not execution evidence',?7,5,3)",
+            params![id,index,name,state,kind,serde_json::to_string(&commands).unwrap(),if index==0 {"running"} else {"waiting"}]).unwrap();
+    }
+
+    fn pin_fixture_scope(conn: &Connection, id: &str, root: &Path) {
+        let task = write_task_scope(root, vec!["README.md".into()], vec![".env".into()]);
+        let checksum = stable_checksum(&fs::read_to_string(&task).unwrap());
+        conn.execute(
+            "update loop_runs set task_spec_path=?1,task_spec_checksum=?2 where id=?3",
+            params![task.display().to_string(), checksum, id],
+        )
+        .unwrap();
+        let snapshot = build_loop_snapshot(conn, read_loop_run(conn, id).unwrap()).unwrap();
+        pin_initial_baseline(conn, &snapshot).unwrap();
+    }
+
+    #[test]
+    fn non_git_scope_blocks_changes_and_rejects_missing_or_tampered_baselines() {
+        let temp = temp_project_dir();
+        let root = temp.join("project");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("README.md"), "pending").unwrap();
+        let conn = open_db(temp.join("db.sqlite")).unwrap();
+        insert_fixture_loop(&conn, "scope-test", &root);
+        insert_fixture_step(&conn, "scope-test", 0, "plan", "planned", "mock", vec![]);
+        pin_fixture_scope(&conn, "scope-test", &root);
+        let snapshot =
+            build_loop_snapshot(&conn, read_loop_run(&conn, "scope-test").unwrap()).unwrap();
+        let no_git = serde_json::json!({"isGitRepo":false});
+        assert_eq!(
+            scope_gate_for_snapshot(&snapshot, &no_git)["verified"],
+            true
+        );
+        fs::write(root.join("README.md"), "verified").unwrap();
+        let allowed = scope_gate_for_snapshot(&snapshot, &no_git);
+        assert_eq!(allowed["passed"], true);
+        assert_eq!(allowed["changedFiles"], serde_json::json!(["README.md"]));
+        fs::write(root.join("outside.txt"), "unexpected").unwrap();
+        assert_eq!(scope_gate_for_snapshot(&snapshot, &no_git)["passed"], false);
+        fs::remove_file(root.join("outside.txt")).unwrap();
+        fs::write(root.join(".env"), "synthetic fixture").unwrap();
+        assert_eq!(
+            scope_gate_for_snapshot(&snapshot, &no_git)["deniedMatches"],
+            serde_json::json!([".env"])
+        );
+        fs::remove_file(root.join(".env")).unwrap();
+        fs::remove_file(root.join("README.md")).unwrap();
+        assert_eq!(
+            scope_gate_for_snapshot(&snapshot, &no_git)["changedFiles"],
+            serde_json::json!(["README.md"])
+        );
+        let baseline = fs::read(&snapshot.git_baseline_path).unwrap();
+        fs::write(&snapshot.git_baseline_path, "{}").unwrap();
+        assert_eq!(
+            scope_gate_for_snapshot(&snapshot, &no_git)["verified"],
+            false
+        );
+        fs::write(&snapshot.git_baseline_path, baseline).unwrap();
+        let mut legacy = snapshot.clone();
+        legacy.scope_baseline_checksum.clear();
+        assert_eq!(scope_gate_for_snapshot(&legacy, &no_git)["passed"], false);
+        assert!(pin_initial_baseline(&conn, &snapshot).is_err());
+        fs::write(&snapshot.task_spec_path, "{}").unwrap();
+        assert_eq!(
+            scope_gate_for_snapshot(&snapshot, &no_git)["verified"],
+            false
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn non_git_scope_is_enforced_before_and_after_local_execution() {
+        for preexisting in [true, false] {
+            let temp = temp_project_dir();
+            let root = temp.join("project");
+            fs::create_dir(&root).unwrap();
+            fs::write(root.join("README.md"), "pending").unwrap();
+            let conn = open_db(temp.join("db.sqlite")).unwrap();
+            let id = format!(
+                "scope-enforcement-{}",
+                TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+            );
+            insert_fixture_loop(&conn, &id, &root);
+            insert_fixture_step(
+                &conn,
+                &id,
+                0,
+                "code",
+                "coding",
+                "local_runner",
+                vec![
+                    "/bin/sh -c 'printf verified > README.md; printf changed > outside.txt'".into(),
+                ],
+            );
+            pin_fixture_scope(&conn, &id, &root);
+            if preexisting {
+                fs::write(root.join("outside.txt"), "preexisting").unwrap();
+            }
+            let snapshot = advance_loop_in_db(
+                &conn,
+                id.clone(),
+                process_runner::ScopeGuard::acquire(&id).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                snapshot.steps[0].status,
+                if preexisting { "blocked" } else { "failed" }
+            );
+            assert_eq!(
+                fs::read_to_string(root.join("README.md")).unwrap(),
+                if preexisting { "pending" } else { "verified" }
+            );
+            assert_eq!(acceptance_gates(&snapshot)["scopePassed"], false);
+            assert_eq!(
+                acceptance_verdict(&snapshot, &acceptance_gates(&snapshot)),
+                "blocked"
+            );
+            fs::remove_dir_all(temp).unwrap();
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn local_pipeline_retries_bad_citations_without_replaying_passed_work() {
+        let temp = temp_project_dir();
+        let root = temp.join("project");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("README.md"), "pending").unwrap();
+        let mut conn = open_db(temp.join("db.sqlite")).unwrap();
+        let id = format!(
+            "local-evidence-{}",
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        insert_fixture_loop(&conn, &id, &root);
+        insert_fixture_step(
+            &conn,
+            &id,
+            0,
+            "code",
+            "coding",
+            "local_runner",
+            vec!["/bin/sh -c 'printf verified > README.md'".into()],
+        );
+        insert_fixture_step(
+            &conn,
+            &id,
+            1,
+            "build",
+            "building",
+            "local_runner",
+            vec!["/bin/sh -c 'test -s README.md'".into()],
+        );
+        // /bin/cat is a deterministic local process, never a model CLI.
+        insert_fixture_step(&conn, &id, 2, "review", "reviewing", "cli", vec![]);
+        insert_fixture_step(&conn, &id, 3, "accept", "acceptance", "mock", vec![]);
+        // Synthetic unit-test gates only: no live authorization is created.
+        write_operator(&root, "TASK", 2.0, "ready_to_start_real_micro", vec![]);
+        write_approval(&root, "TASK", 2.0, "test-generated-at");
+        write_preflight(&root, "TASK", "ready_to_run", vec![]);
+        for decision in [
+            "REAL-MICRO-HUMAN-GATE",
+            "APPLY-REAL-MICRO-PROFILE",
+            "RUN-REAL-MICRO-TASK",
+        ] {
+            write_approval_decision(
+                &root,
+                decision,
+                "unit-test only",
+                &serde_json::json!({}),
+                &root.join(".dbc/operator/latest.json"),
+            )
+            .unwrap();
+        }
+        pin_fixture_scope(&conn, &id, &root);
+        let advance = |conn: &Connection| {
+            advance_loop_in_db(
+                conn,
+                id.clone(),
+                process_runner::ScopeGuard::acquire(&id).unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(advance(&conn).active_step_index, 1);
+        let built = advance(&conn);
+        assert_eq!(built.active_step_index, 2);
+        let preserved = fs::read(&built.steps[1].evidence_path).unwrap();
+        let response = root.join(".dbc/evidence/fixture-response.json");
+        fs::write(
+            &response,
+            r#"{"verdict":"pass","summary":"No secrets were accessed","evidenceRefs":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(advance(&conn).status, "failed");
+        assert_eq!(read_loop_step(&conn, &id, 2).unwrap().attempt_count, 1);
+        loop_lifecycle::continue_run(&mut conn, &id, true).unwrap();
+        let run = read_loop_run(&conn, &id).unwrap();
+        let snapshot = build_loop_snapshot(&conn, read_loop_run(&conn, &id).unwrap()).unwrap();
+        let packet = evidence_handoff::prepare(&run, &snapshot.steps[2], &snapshot.steps).unwrap();
+        fs::write(&response,serde_json::to_vec(&serde_json::json!({"verdict":"pass","summary":"Reviewed current build evidence.","evidenceRefs":packet.references})).unwrap()).unwrap();
+        assert_eq!(advance(&conn).active_step_index, 3);
+        let finished = advance(&conn);
+        assert_eq!(finished.status, "completed");
+        assert_eq!(
+            finished
+                .steps
+                .iter()
+                .map(|s| s.attempt_count)
+                .collect::<Vec<_>>(),
+            vec![1, 1, 2, 1]
+        );
+        assert_eq!(
+            fs::read(&finished.steps[1].evidence_path).unwrap(),
+            preserved
+        );
+        assert!(evidence_handoff::snapshot_valid(&finished));
+        let gates = acceptance_gates(&finished);
+        assert_eq!(gates["scopeVerified"], true);
+        assert_eq!(gates["scopePassed"], true);
+        assert_eq!(gates["securityFindings"], 0);
+        assert_eq!(acceptance_verdict(&finished, &gates), "accepted", "{gates}");
+        let workspace =
+            read_json_optional(&loop_git_workspace_path(&finished.project_path, &id)).unwrap();
+        assert_eq!(workspace["changedFiles"], serde_json::json!(["README.md"]));
+        assert_eq!(workspace["dirtyTree"], true);
+        assert!(fs::read_to_string(&finished.commit_proposal_path)
+            .unwrap()
+            .contains("No Git repository"));
+        assert_eq!(
+            fs::read_to_string(root.join("README.md")).unwrap(),
+            "verified"
+        );
+        fs::write(&finished.steps[0].artifact_path, "altered").unwrap();
+        assert!(!evidence_handoff::snapshot_valid(&finished));
+        assert_eq!(
+            acceptance_verdict(&finished, &acceptance_gates(&finished)),
+            "blocked"
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn report_redaction_preserves_schema_and_real_findings_remain_blocking() {
+        let synthetic = ["ghp_", "synthetictestcredential0000000000"].concat();
+        let mut value = serde_json::json!({"finalText":serde_json::json!({"verdict":"pass","summary":"No secrets accessed.","actions":[synthetic],"evidenceRefs":[]}).to_string()});
+        secret_diagnostics::redact_value(&mut value);
+        let report = report_from_output(value["finalText"].as_str().unwrap());
+        assert_eq!(report.verdict, "pass");
+        let persisted = serde_json::to_string(&report).unwrap();
+        assert!(!persisted.contains(&synthetic));
+        assert!(!scan_text_for_secret_findings("fixture", &persisted).is_empty());
+        let repeated = vec!["[REDACTED SECRET-LIKE LINE]"; 100].join("\n");
+        assert!(scan_text_for_secret_findings("fixture", &repeated).is_empty());
+        let detected = redact_text(&format!("password={}", "syntheticfixture"));
+        assert_eq!(
+            scan_text_for_secret_findings("fixture", &vec![detected; 100].join("\n")).len(),
+            1
+        );
+    }
+
     #[test]
     fn runtime_lease_excludes_a_second_instance_and_releases_on_drop() {
         let dir = temp_project_dir();
@@ -10460,17 +10958,20 @@ mod tests {
     #[cfg(unix)]
     fn durable_stop_cancels_real_process_preserves_evidence_and_recovers() {
         let dir = temp_project_dir();
+        let workspace = dir.join("project");
+        fs::create_dir(&workspace).unwrap();
         let path = dir.join("dbc.sqlite");
         let mut conn = open_db(path.clone()).unwrap();
         let id = format!(
             "stop-fixture-{}",
             TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
         );
-        let artifacts = dir.join(".dbc/artifacts").join(&id);
+        let artifacts = workspace.join(".dbc/artifacts").join(&id);
         conn.execute("insert into loop_runs (id, project_id, task_id, project_path, status, active_step_index, artifact_dir, created_at, updated_at, task_budget_limit)
-            values (?1, 'project', 'TASK', ?2, 'running', 0, ?3, '', '', 1)", params![id, dir.display().to_string(), artifacts.display().to_string()]).unwrap();
+            values (?1, 'project', 'TASK', ?2, 'running', 0, ?3, '', '', 1)", params![id, workspace.display().to_string(), artifacts.display().to_string()]).unwrap();
         conn.execute("insert into loop_steps (loop_id, step_index, step_id, state, agent, role_id, provider_id, provider_type, provider_command, provider_args_template, provider_run_mode, agent_mode, timeout_seconds, max_attempts, summary, evidence, status)
             values (?1, 0, 'build', 'implementation', 'fixture', 'builder', 'fixture', 'cli', '/bin/sh', ?2, 'real', 'write_workspace', 40, 3, '', '', 'running')", params![id, "-c 'printf partial; sleep 30'"]).unwrap();
+        pin_fixture_scope(&conn, &id, &workspace);
         let worker_path = path.clone();
         let worker_id = id.clone();
         let (ready_tx, ready_rx) = mpsc::channel();
@@ -10910,6 +11411,87 @@ mod tests {
     }
 
     #[test]
+    fn native_provider_yaml_matches_shared_node_fixture() {
+        let fixture = include_str!("../../scripts/fixtures/providers-native-sync.yaml");
+        let value: serde_json::Value = serde_yaml::from_str(fixture).unwrap();
+        assert_eq!(json_to_yaml(&value), fixture);
+    }
+
+    #[test]
+    fn generic_project_operator_does_not_require_dbc_distribution() {
+        let dir = temp_project_dir();
+        let dbc = dir.join(".dbc");
+        for folder in ["readiness", "real-loop", "compare"] {
+            fs::create_dir_all(dbc.join(folder)).unwrap();
+        }
+        let providers = serde_json::json!({
+            "version": 1, "kind": "providers", "providers":
+            (["codex_cli", "claude_code", "local_terminal"].map(|id| serde_json::json!({
+                "id": id, "type": if id == "local_terminal" { "local_runner" } else { "cli" },
+                "command": std::env::current_exe().unwrap().display().to_string(), "runMode": "mock"
+            })))
+        });
+        for file in [
+            "providers.yaml",
+            "providers.mock.yaml",
+            "providers.real-micro.yaml",
+        ] {
+            fs::write(dbc.join(file), json_to_yaml(&providers)).unwrap();
+        }
+        fs::write(
+            dbc.join("readiness/latest.json"),
+            r#"{"status":"ready","blockers":[]}"#,
+        )
+        .unwrap();
+        fs::write(dbc.join("real-loop/latest.json"), r#"{"status":"prepared","blockers":[],"task":{"id":"REAL-MICRO-README","budgetLimit":2}}"#).unwrap();
+        fs::write(
+            dbc.join("compare/latest.json"),
+            r#"{"status":"pending_real","blockers":[]}"#,
+        )
+        .unwrap();
+        let report = generate_operator_checklist(ReleasePackageRequest {
+            project_path: dir.display().to_string(),
+        })
+        .unwrap();
+        assert_eq!(report.blockers, 0);
+        assert_eq!(report.status, "awaiting_human_approval");
+        assert!(!dbc.join("release/latest.json").exists());
+        assert!(ensure_real_micro_profile_approval(&dbc).is_err());
+
+        fs::write(
+            dbc.join("readiness/latest.json"),
+            r#"{"status":"blocked","blockers":[{"subject":"baseline","detail":"failed"}]}"#,
+        )
+        .unwrap();
+        let blocked = generate_operator_checklist(ReleasePackageRequest {
+            project_path: dir.display().to_string(),
+        })
+        .unwrap();
+        assert!(blocked.blockers > 0);
+        assert_eq!(blocked.status, "blocked");
+        assert!(ensure_real_micro_profile_approval(&dbc).is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn distribution_evidence_is_informational_even_when_incomplete() {
+        for value in [
+            None,
+            Some(serde_json::json!({"checklist":{}})),
+            Some(serde_json::json!({"checklist":{"appExists":false}})),
+        ] {
+            let mut checks = Vec::new();
+            operator_distribution_evidence(&value, &mut checks);
+            assert_eq!(checks.len(), 1);
+            assert_eq!(checks[0]["level"], "info");
+            assert!(checks[0]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("Not required for project tasks"));
+        }
+    }
+
+    #[test]
     fn real_cli_loop_requires_positive_budget() {
         let dir = temp_project_dir();
         write_operator(&dir, "TASK", 0.0, "ready_to_start_real_micro", Vec::new());
@@ -11330,7 +11912,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
-    fn temp_project_dir() -> PathBuf {
+    pub(super) fn temp_project_dir() -> PathBuf {
         let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("dbc-test-{}-{id}", unix_millis()));
         fs::create_dir_all(&dir).unwrap();
@@ -11623,6 +12205,7 @@ mod tests {
             task_budget_limit: budget_limit,
             task_spec_path: String::new(),
             task_spec_checksum: String::new(),
+            scope_baseline_checksum: String::new(),
             memory_context: String::new(),
             memory_refs: Vec::new(),
             status: "running".to_string(),
@@ -11662,6 +12245,7 @@ mod tests {
             structured_report_json: String::new(),
             artifact_path: String::new(),
             evidence_path: String::new(),
+            evidence_checksum: String::new(),
             started_at: String::new(),
             finished_at: String::new(),
         }

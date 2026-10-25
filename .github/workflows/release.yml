@@ -59,6 +59,7 @@ jobs:
       - name: Verify provider and MCP contracts
         run: |
           pnpm provider-adapter-smoke
+          pnpm project-readiness-smoke
           pnpm mcp-policy-smoke
           pnpm mcp-proxy-smoke
           pnpm api-adapter-smoke

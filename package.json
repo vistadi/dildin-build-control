@@ -22,6 +22,7 @@
     "release-check": "node scripts/release-check.mjs",
     "controlled-smoke": "node scripts/controlled-smoke.mjs",
     "real-readiness": "node scripts/real-readiness.mjs",
+    "project-readiness-smoke": "node scripts/project-readiness-smoke.mjs",
     "real-micro-plan": "node scripts/real-micro-plan.mjs",
     "compare-real-micro": "node scripts/compare-real-micro.mjs",
     "task-intake": "node scripts/task-intake.mjs",
@@ -61,6 +62,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "typescript": "^5.5.4",
-    "vite": "^5.4.2"
+    "vite": "^5.4.2",
+    "yaml": "^2.9.1"
   }
 }

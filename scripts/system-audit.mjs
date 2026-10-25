@@ -1,3 +1,4 @@
+import { parseProviders } from "./lib/providers.mjs";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -508,25 +509,6 @@ function readText(filePath) {
 function writeJson(filePath, value) {
   mkdirSync(path.dirname(filePath), { recursive: true });
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function parseProviders(text) {
-  const blocks = text.split(/\n  - id: /).slice(1);
-  return blocks.map((block) => {
-    const lines = block.split("\n");
-    const provider = { id: lines[0].trim() };
-    for (const line of lines.slice(1)) {
-      const match = line.match(/^    ([A-Za-z0-9_]+):\s*(.*)$/);
-      if (!match) continue;
-      provider[match[1]] = unquote(match[2].trim());
-    }
-    return provider;
-  });
-}
-
-function unquote(value) {
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) return value.slice(1, -1);
-  return value;
 }
 
 function auditMarkdown(value) {

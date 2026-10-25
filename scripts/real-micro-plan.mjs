@@ -1,3 +1,6 @@
+import { parseProviders } from "./lib/providers.mjs";
+import { distributionEvidence } from "./lib/distribution-evidence.mjs";
+import { loadMicroTask } from "./lib/micro-task.mjs";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -20,7 +23,7 @@ const release = readJson(releasePath);
 const providersText = readText(providersPath);
 const providers = parseProviders(providersText);
 
-const task = {
+const task = loadMicroTask({
   version: 1,
   id: "REAL-MICRO-README",
   title: "Real micro loop: README marker",
@@ -56,7 +59,7 @@ const task = {
     "Claude review returns request_changes or fail.",
   ],
   updatedAt: String(Date.now()),
-};
+}, process.argv.slice(2));
 
 const taskPath = path.join(tasksDir, `${task.id}.json`);
 writeJson(taskPath, task);
@@ -96,9 +99,6 @@ if (!providers.find((provider) => provider.id === "codex_cli" && existsSync(prov
 if (!providers.find((provider) => provider.id === "claude_code" && existsSync(provider.command || ""))) {
   blockers.push("Claude exact path is missing or unavailable.");
 }
-if (!release?.checklist || Object.values(release.checklist).some((value) => value !== true)) {
-  blockers.push("Release checklist is missing or not fully true.");
-}
 
 const plan = {
   version: 1,
@@ -115,6 +115,8 @@ const plan = {
     warnings: readiness?.warnings || [],
   },
   release: {
+    requiredForTaskExecution: false,
+    diagnostic: distributionEvidence(release),
     path: releasePath,
     dmgChecksum: release?.checksums?.dmg || "",
     checklist: release?.checklist || {},
@@ -190,27 +192,6 @@ function readText(filePath) {
 function writeJson(filePath, value) {
   mkdirSync(path.dirname(filePath), { recursive: true });
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function parseProviders(text) {
-  const blocks = text.split(/\n  - id: /).slice(1);
-  return blocks.map((block) => {
-    const lines = block.split("\n");
-    const provider = { id: lines[0].trim() };
-    for (const line of lines.slice(1)) {
-      const match = line.match(/^    ([A-Za-z0-9_]+):\s*(.*)$/);
-      if (!match) continue;
-      provider[match[1]] = unquote(match[2].trim());
-    }
-    return provider;
-  });
-}
-
-function unquote(value) {
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    return value.slice(1, -1);
-  }
-  return value;
 }
 
 function planMarkdown(plan) {

@@ -1,3 +1,5 @@
+import { parseProviders } from "./lib/providers.mjs";
+import { distributionEvidence } from "./lib/distribution-evidence.mjs";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -35,7 +37,7 @@ checkFile("real micro provider profile", refs.realMicroProfile);
 checkReadiness(readiness);
 checkRealPlan(realPlan);
 checkComparison(comparison);
-checkRelease(release);
+checks.push(distributionEvidence(release));
 checkProviders(providers);
 
 const activeRealProviders = providers.filter((provider) => provider.type === "cli" && provider.runMode === "real");
@@ -181,10 +183,10 @@ function buildSteps(taskId) {
     },
     {
       id: "readiness-review",
-      title: "Review readiness, plan, comparison, and release evidence",
-      files: [refs.readiness, refs.realPlan, refs.comparison, refs.release],
+      title: "Review project readiness, plan and comparison",
+      files: [refs.readiness, refs.realPlan, refs.comparison],
       expectedEvidence: "No blockers; warnings are understood by the operator.",
-      stopIf: "Any report is missing, blocked, or refers to a stale task/release.",
+      stopIf: "A required project report is missing, blocked, or refers to a stale task. Distribution evidence is informational.",
     },
     {
       id: "human-confirmation",
@@ -290,20 +292,6 @@ function checkComparison(value) {
   }
 }
 
-function checkRelease(value) {
-  if (!value) {
-    fail("release", "Release package is missing.");
-    return;
-  }
-  const checklist = value.checklist || {};
-  const failed = Object.entries(checklist).filter(([, ready]) => ready !== true);
-  if (failed.length) {
-    fail("release", `Release checklist has failing items: ${failed.map(([key]) => key).join(", ")}`);
-  } else {
-    pass("release", `Release checksum ${value.checksums?.dmg || "missing"}.`);
-  }
-}
-
 function checkProviders(value) {
   const codex = value.find((provider) => provider.id === "codex_cli");
   const claude = value.find((provider) => provider.id === "claude_code");
@@ -352,27 +340,6 @@ function readText(filePath) {
 function writeJson(filePath, value) {
   mkdirSync(path.dirname(filePath), { recursive: true });
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function parseProviders(text) {
-  const blocks = text.split(/\n  - id: /).slice(1);
-  return blocks.map((block) => {
-    const lines = block.split("\n");
-    const provider = { id: lines[0].trim() };
-    for (const line of lines.slice(1)) {
-      const match = line.match(/^    ([A-Za-z0-9_]+):\s*(.*)$/);
-      if (!match) continue;
-      provider[match[1]] = unquote(match[2].trim());
-    }
-    return provider;
-  });
-}
-
-function unquote(value) {
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    return value.slice(1, -1);
-  }
-  return value;
 }
 
 function providerSummary(provider) {

@@ -43,6 +43,39 @@
 
 ## Resolved
 
+### 2026-10-25 — What evidence must a real review prove before acceptance?
+
+- Opened/resolved: 2026-10-25; owner: product maintainer.
+- Why it matters: the live test rejected unsubstantiated review; broad redaction
+  markers and missing non-Git scope evidence prevented honest acceptance.
+- Result: explicit current-run references, identity/attempt/hash validation and
+  SQLite pins; informational masking separated from concrete credential indicators;
+  pre-execution bounded filesystem comparison for new non-Git runs. Maintainer
+  requested implementation and local tests only. All are implemented locally and
+  verified by deterministic tests, not released or live-retested.
+- Affected modules: native prompts, step evidence, report normalization, scanner,
+  scope and acceptance; documented in the new accepted DECISIONS entry.
+- Status: local contract resolved. Citations do not establish actual tool reads;
+  generic text streams remain limited. No new AI invocation is authorized. The
+  historical failed test and seven-of-eight accounting remain unchanged.
+- Evidence: `worklog/2026-10-25-evidence-integrity-and-non-git-scope.md`.
+
+### 2026-10-25 — What readiness contract should ordinary projects use?
+
+- Opened/resolved: 2026-10-25; owner: product maintainer.
+- Why it matters: installed alpha.4 required local DBC/Tauri packaging even for
+  a README task, and its Node helpers could not read native provider YAML.
+- Result: maintainer approved separating informational distribution evidence from
+  task readiness, preserving task/budget/operator/preflight safeguards, and adding
+  the shared standard YAML parser in DBC. Local tests and actual native Sync config
+  plus ready-to-run in an ordinary project passed. Source is committed on the
+  feature branch, not merged/released; see the publication worklog.
+- Affected modules: native checklist, Node readiness/plan/profile/report helpers.
+- Status: contract resolved by the accepted decision in DECISIONS.md. Subsequent
+  login and native Retry passed QA/review/security; final acceptance identified
+  separate evidence/finding reliability issues, resolved locally in the entry above.
+- Evidence: `worklog/2026-10-25-generic-project-readiness-fix.md`.
+
 ### 2026-10-24 — How should PR #16 CodeQL alert #6 be resolved?
 
 - Resolution date: 2026-10-24.
