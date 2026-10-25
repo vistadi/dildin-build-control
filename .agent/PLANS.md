@@ -1,5 +1,90 @@
 # DBC Active Plans
 
+## 2026-10-25 — Publish readiness and evidence fixes for review
+
+Status: publication in progress on `codex/readiness-evidence-integrity`.
+Maintainer explicitly approved all verified readiness/evidence commits, push and a
+PR to main; no new AI calls, merge, release or installed-app update.
+
+1. Review all 34 pending files and split readiness/evidence hunks — done.
+2. Re-run local checks and verify the readiness-only staged snapshot — done:
+   75 combined Rust tests; 63 readiness-only tests; TypeScript/Vite, ten smoke
+   suites, offline native build and formatting passed.
+3. Readiness `cbae019` and evidence `19baab0` committed; memory checkpoint next.
+4. Push only the feature branch, create/attach PR, verify exact refs/status and
+   record publication. Do not enable auto-merge or create tags.
+
+Evidence: `memory/worklog/2026-10-25-readiness-evidence-publication.md`.
+
+## 2026-10-25 — Evidence handoff, finding semantics and non-Git scope
+
+Status: implemented and locally verified; source committed as `19baab0` in the
+publication plan above. Original fix scope prohibited AI calls/publication; the
+later explicit request authorizes commits/push/PR only. Installed-app/data unchanged.
+
+1. Bind inter-step evidence to current run/task/step/attempt and checksums; require
+   valid citations for real review/acceptance, with negative regression coverage.
+2. Separate redaction events from credential evidence without dropping detection
+   of real credential-shaped output or exposing it in logs.
+3. Capture bounded non-Git file fingerprints before execution, compare additions,
+   modifications and deletions, reject incomplete/unsafe snapshots and scope changes.
+4. Run offline Rust tests, deterministic local fixtures, frontend/contracts and
+   inspect diff; update memory with actual results and a proposed commit inventory.
+
+All four items are complete. 75 Rust tests, offline native build, TypeScript/Vite,
+all ten smoke suites, formatting and diff checks passed. Deterministic `/bin/cat`
+responses test rejected citations, Retry without replay, accepted valid evidence
+and blocked tampering; no model CLI is called. Historical live results remain
+failed/blocked. New provider/desktop verification requires separate authorization.
+
+Evidence: `memory/worklog/2026-10-25-evidence-integrity-and-non-git-scope.md`.
+
+## 2026-10-25 — Generic project readiness fix and bounded live retest
+
+Status: fixes locally verified; bounded live test finished with acceptance blocked.
+Maintainer approved both fixes and up to eight AI calls, no commit/push/release.
+Adding `yaml` to DBC's dev dependencies was separately approved.
+
+1. Shared structural provider parsing/profile round trips across ten helpers — done.
+2. Distribution evidence informational; human/task/budget/preflight remain gated — done.
+3. 63 Rust tests, readiness regressions, frontend build and existing smokes — passed.
+4. Separate `DBC Readiness QA` bundle, fresh README project, native-saved config,
+   successful controlled baseline and native ready-to-run — verified. Codex plan/code
+   and local assertions passed. After confirmed Claude login, native Retry resumed
+   only QA; QA/review/security passed. Acceptance requested changes because actual
+   evidence review was unsubstantiated and security findings remained unresolved.
+   Seven of eight total CLI invocations used (four of the five remaining allowance).
+5. Safe mock restored, QA closed, private evidence/data copies byte-verified.
+   Installed alpha.4 binary and original SQLite remain unchanged. No Git publication.
+
+The follow-up evidence/finding/non-Git fixes are now locally implemented and tested.
+Readiness is committed as `cbae019`; publication follows the newer plan above.
+No new live retry occurred; the remaining call, merge and release are not authorized.
+
+Evidence: `memory/worklog/2026-10-25-generic-project-readiness-fix.md` and
+`memory/worklog/2026-10-25-real-provider-retry-after-login.md`.
+
+## 2026-10-25 — Real-provider disposable example
+
+Status: investigation completed; live execution blocked before any AI call.
+Approved: one README marker change in a separate project,
+local validation and Codex/Claude review, at most eight AI CLI calls. No commit,
+push, install, secret access, source fix or release; restore safe mock afterward.
+
+1. Original app data backed up and byte-compared; fresh synthetic project prepared.
+2. Installed native Checklist/Dry-run reproduced blocked readiness. Required
+   release generation assumes a Tauri app/DMG in the target project; native-saved
+   providers YAML also fails the helper scripts' format-specific parser.
+3. No gate bypass, approval artifact or live loop. README unchanged, zero of eight
+   AI calls used. Evidence/test session preserved privately; original Application
+   Support/WebKit restored byte-for-byte, app relaunched in safe mock.
+
+Follow-up: both fixes and the bounded retest were approved and performed in the
+plan above. This entry preserves the initial blocked attempt, not current fix status.
+No commit/push is authorized for this task.
+
+Evidence: `memory/worklog/2026-10-25-real-provider-example.md`.
+
 ## 2026-10-25 — Alpha.4 installation and native lifecycle QA
 
 Status: completed. The maintainer confirmed installation, coordinated rollback

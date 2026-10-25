@@ -1,5 +1,13 @@
 # DBC Project State
 
+Current source publication (2026-10-25): feature branch
+`codex/readiness-evidence-integrity` contains `cbae019` (readiness/YAML) and
+`19baab0` (evidence/finding/non-Git scope). Fresh local checks pass: 75 Rust tests,
+offline native build, TypeScript/Vite, ten smoke suites and formatting; the isolated
+readiness-only snapshot additionally passes 63 tests. Memory commit, push and PR
+are in progress under explicit authorization. No new AI calls, merge, release or
+installed-app update. This is separate from the released state below.
+
 Last verified repository/release update: 2026-10-25. PR #19 merged into `main` as
 `4668e8122b89d9d77a50e6a8f0911cd679674179` after all five exact-head CI/CodeQL checks
 passed at `af986ad`, with no new CodeQL alerts and no review threads. Release
@@ -21,8 +29,61 @@ The alpha.3 Retry/Running defects are fixed in installed alpha.4 through PR #19.
 QA used the advanced legacy-loop path, not full Guided Harness or live providers.
 Original user data was restored after privately preserving the QA session; alpha.4
 is left open on Settings, safe mock enabled, real execution off and MCP isolated.
-Live-provider, forced-crash, Intel-window and second-instance QA remain unperformed.
+Full live-provider acceptance, forced-crash, Intel-window and second-instance QA
+remain unperformed; see the partial live test below.
 See `worklog/2026-10-25-alpha4-install-and-native-qa.md` for verification and rollback.
+
+The initial real-example attempt reproduced two alpha.4 blockers before AI execution:
+mandatory DBC/Tauri packaging inside an ordinary target project, and Node helpers
+misreading native-saved YAML as zero providers. The maintainer subsequently approved
+both fixes and adding `yaml` to DBC only. The feature-branch source now separates
+distribution evidence from task readiness and shares strict structural YAML parsing
+across ten helpers. Human approval, bounded scope/budget, baseline, ledger and
+preflight guards remain. Readiness regression tests, all existing smoke suites,
+TypeScript/Vite build and 63 Rust tests pass; remote CI has not run for these edits.
+
+A separate arm64 debug bundle (`DBC Readiness QA`, isolated app identifier) reached
+native ready-to-run in a fresh README project after actual Sync config. Codex plan
+and code each passed once, changing only `Status: pending` to `Status: verified`;
+both configured local assertions passed. After the first Claude QA attempt failed
+before login, confirmed ordinary/safe-mode authentication allowed native Retry of
+that same step. QA then passed at attempt 2, review/security at attempt 1 each.
+Plan/code/build remained at one attempt with byte-identical evidence; the previous
+failed QA evidence was archived byte-for-byte. No new loop was created.
+
+The historical live test's final acceptance returned request_changes: Claude's reports did not substantiate
+review of actual current-loop execution evidence, security findings were unresolved,
+and its native scope verification was unverified_non_git. Final state is failed /
+blocked, not accepted. Four new CLI invocations used seven of eight total; one is
+unused. The final 67 security entries are all redacted-secret-line markers, not
+proof of 67 credential exposures. Static inspection shows redact_text masks even
+ordinary text containing "secret", then the tested scanner labelled every marker high;
+echoing previous reports amplifies the count. Generic text provider output does
+not provide a complete tool-read trace. These are follow-up reliability issues,
+not reasons to disable redaction or waive evidence requirements.
+
+Independent file comparisons and both local assertions still pass. Safe mock was
+verified, QA closed, and before/after snapshots preserved privately. Installed
+alpha.4 binary and original SQLite were byte-unchanged. Source fixes are now in the
+feature-branch Git history, not the installed release. See
+`worklog/2026-10-25-real-provider-retry-after-login.md` for final test evidence and
+`worklog/2026-10-25-generic-project-readiness-fix.md` for implementation checks.
+
+Subsequent approved local fixes now bind step evidence v2 to current run/task/spec,
+attempt and SHA-256 pins in SQLite, supply actual input references/summaries to
+CLI stages, and require matching citations for real QA/review/security/acceptance.
+Final acceptance rechecks the chain. Broad masking is informational rather than a
+credential finding; concrete indicators remain masked and blocking. New non-Git
+runs use a pinned pre-execution filesystem baseline and allow/deny comparison
+before/after executable stages. Legacy/incomplete/tampered evidence fails closed.
+These changes pass 75 Rust tests (12 added beyond the prior readiness baseline),
+offline native build, TypeScript/Vite and all ten smoke suites. A deterministic
+local pipeline exercises rejected citations, Retry, acceptance and tampering.
+The local implementation task made no new AI calls, native UI test, install or
+remote CI run. Subsequent authorized Git publication is recorded at the top.
+Installed alpha.4 and the old failed live test are not recertified by these checks.
+See `worklog/2026-10-25-evidence-integrity-and-non-git-scope.md` and
+`docs/REAL_PROJECT_READINESS.md` for exact compatibility and scope limits.
 
 ## Architecture
 
@@ -296,6 +357,11 @@ See `worklog/2026-10-25-alpha4-install-and-native-qa.md` for verification and ro
 
 Next priorities after the verified 2026-10-25 alpha.4 release:
 
+0. Complete the authorized feature-branch publication, then inspect exact-head
+   CI/CodeQL and review the readiness/YAML/evidence changes. The three live-example
+   blockers are locally fixed/tested, not installed or live-retested. Obtain fresh
+   authorization before desktop/live QA, merge or release. Preserve failed evidence
+   and the seven-of-eight call count.
 1. Fix the inert Workspace shortcuts and align preflight/artifact diagnostics with
    effective mock routing, then cover real-process cancellation, forced recovery
    and second-instance behavior in separately scoped fixtures.
