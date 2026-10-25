@@ -3128,3 +3128,13 @@ pre {
 .loop-lifecycle-controls button {
   min-width: 9rem;
 }
+
+.loop-retry-confirmation {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 12px;
+  background: var(--surface-2);
+  overflow-wrap: anywhere;
+}

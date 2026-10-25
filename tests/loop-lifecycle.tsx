@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { LoopLifecycleControls } from "../src/components/LoopLifecycleControls";
-import { continuePreviewLoop } from "../src/loopLifecycle";
+import { continuePreviewLoop, operatorRunStatus } from "../src/loopLifecycle";
 import type { LoopRunSnapshot } from "../src/types";
 import "../src/styles.css";
 
@@ -19,17 +19,24 @@ function Fixture() {
   const [busy, setBusy] = useState<"stop" | "resume" | "retry" | null>(null);
   const [error, setError] = useState("");
   const [calls, setCalls] = useState(0);
+  const [retryCalls, setRetryCalls] = useState(0);
   return <main className="content view-stack"><h1>Run lifecycle QA</h1><p>Preview fixture. No provider or local process is running.</p>
     <LoopLifecycleControls run={run} busy={busy} error={error}
       onStop={() => { setBusy("stop"); setRun({ ...run, status: "stopping" }); setCalls(calls + 1); }}
       onResume={() => setRun(continuePreviewLoop(run, false))}
-      onRetry={() => setRun(continuePreviewLoop(run, true))} />
+      onRetry={() => { setRetryCalls(count => count + 1); setRun(continuePreviewLoop(run, true)); }} />
     <p>Stop requests: {calls}</p>
+    <p>Retry requests: {retryCalls}</p>
+    <p>Operator status: {operatorRunStatus(run, { status: "slice_running" })}</p>
     <div className="button-row">
       <button className="ghost-btn" onClick={() => { setBusy(null); setError(""); setRun({ ...run, status: "stopped" }); }}>Settle stop</button>
       <button className="ghost-btn" onClick={() => { setBusy(null); setError(""); setRun({ ...initial, status: "interrupted", steps: [{ ...initial.steps[0], status: "interrupted", attemptCount: 1 }] }); }}>Interrupted fixture</button>
       <button className="ghost-btn" onClick={() => { setBusy(null); setError("Stop could not be confirmed. Resume and Retry remain disabled."); setRun({ ...run, status: "stopping" }); }}>Stop error fixture</button>
       <button className="ghost-btn" onClick={() => { setBusy(null); setError(""); setRun({ ...initial, status: "stopped", steps: [{ ...initial.steps[0], status: "approval_required", requiresApproval: true }] }); }}>Approval fixture</button>
+      <button className="ghost-btn" onClick={() => setRun({ ...run, id: `${run.id}-other` })}>Switch run</button>
+      <button className="ghost-btn" onClick={() => setRun({ ...run, status: "completed" })}>Completed fixture</button>
+      <button className="ghost-btn" onClick={() => { setBusy(null); setError(""); setRun({ ...initial, status: "failed", steps: [{ ...initial.steps[0], status: "failed", attemptCount: 3 }] }); }}>Exhausted fixture</button>
+      <button className="ghost-btn" onClick={() => { setBusy("retry"); setError(""); }}>Retry pending fixture</button>
     </div></main>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);

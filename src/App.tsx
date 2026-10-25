@@ -32,7 +32,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { BuildIdentityPanel, RuntimeActivity } from "./components/RuntimeDiagnostics";
 import { LoopLifecycleControls } from "./components/LoopLifecycleControls";
-import { recoverLoopApproval } from "./loopLifecycle";
+import { operatorRunStatus, recoverLoopApproval } from "./loopLifecycle";
 import { normalizeProviderConfig, parseArgsTemplate as parseCliArgsTemplate, providerContractDiagnostics } from "./cliContracts";
 import { loopTemplate, providerPresets } from "./data";
 import { mergeVerifiedModelCatalog, validateApiProvider } from "./apiAdapters";
@@ -1847,7 +1847,6 @@ export function App() {
 
   async function continueLoop(retry: boolean) {
     if (!currentLoop || loopActionRef.current) return;
-    if (retry && !window.confirm("Retry starts a new attempt and may repeat side effects. Inspect workspace changes, partial evidence and external processes first. Retry this step?")) return;
     const action = retry ? "retry" : "resume";
     loopActionRef.current = action;
     setLoopAction(action);
@@ -4360,18 +4359,15 @@ function LoopsView({
   const activeLoopStep = currentLoop?.steps[currentLoop.activeStepIndex];
   const executionStep = activeLoopStep ?? steps[activeStep] ?? steps[0];
   const latestHarnessRun = harnessOverview.runs[0];
-  const loopDecision = latestHarnessRun
-    ? displayValue(latestHarnessRun.status)
-    : currentLoop
-      ? displayValue(currentLoop.status)
-      : "No active run";
+  const operatorStatus = operatorRunStatus(currentLoop, latestHarnessRun);
+  const loopDecision = currentLoop || latestHarnessRun ? displayValue(operatorStatus) : "No active run";
   return (
     <section className="view-stack">
       <OperatorHint
         step="Step 2"
         title="Run and monitor the work slice"
         detail="This is the operator console for HarnessRun progress. Use Advance for the next safe stage, then create Evidence Pack when the run reaches evidence_ready."
-        status={latestHarnessRun?.status === "blocked" || currentLoop?.status === "failed" ? "blocked" : latestHarnessRun || currentLoop ? "running" : "waiting"}
+        status={operatorStatus}
       />
       <Panel
         title="Harness Runs"
