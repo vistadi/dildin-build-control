@@ -6,6 +6,7 @@ const state = readFileSync(new URL("../src/storage.ts", import.meta.url), "utf8"
 const types = readFileSync(new URL("../src/types.ts", import.meta.url), "utf8");
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const diagnostics = readFileSync(new URL("../src/components/RuntimeDiagnostics.tsx", import.meta.url), "utf8");
+const lifecycle = readFileSync(new URL("../src/components/LoopLifecycleControls.tsx", import.meta.url), "utf8");
 
 const checks = [
   [app.includes('className="skip-link"') && app.includes('id="main-content"'), "skip link targets the main landmark"],
@@ -24,6 +25,9 @@ const checks = [
   [diagnostics.includes("disabled={pending}") && diagnostics.includes("aria-label={`Stop"), "process stop has pending state and accessible name"],
   [app.includes("stopBackendLoop(target.id, target)") && app.includes("if (disposed) return"), "loop stop awaits durable native cancellation and ignores stale results"],
   [app.includes("LoopLifecycleControls") && app.includes("resumeBackendLoop"), "stopped loop exposes explicit Resume separately from Retry"],
+  [!app.includes("window.confirm(") && lifecycle.includes("Confirm retry") && lifecycle.includes("cancelRetry"), "Retry uses an in-app confirmation instead of native WebView confirm"],
+  [lifecycle.includes("cancelButton.current?.focus()") && lifecycle.includes('event.key === "Escape"'), "Retry confirmation defaults to Cancel and supports Escape"],
+  [app.includes("operatorRunStatus(currentLoop, latestHarnessRun)") && app.includes("status={operatorStatus}"), "operator hint uses the selected run's actual status"],
 ];
 
 const failures = checks.filter(([ok]) => !ok);

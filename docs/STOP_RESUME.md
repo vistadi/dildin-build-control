@@ -9,6 +9,9 @@ and does not run processes or persist native evidence.
 - **Resume** continues a queued step or finalizes already completed work. It never
   silently repeats a failed/interrupted attempt or clears a pending approval.
 - **Retry step** explicitly starts another attempt after a confirmation warning.
+  The in-app confirmation initially focuses **Cancel**; Cancel or Escape closes it
+  without starting work. Only **Confirm retry** submits the operation. Switching
+  runs, changing the active attempt or entering a pending action invalidates it.
   Inspect partial evidence, workspace changes and external processes first: retrying
   can repeat side effects. Attempts remain bounded and previous evidence is archived
   under the corresponding artifact/evidence directory's `attempts/attempt-N/` folder.
@@ -38,3 +41,9 @@ partial evidence, reopened SQLite, attempt/approval guards, runtime lease and ar
 evidence. `pnpm loop-lifecycle-smoke` runs frontend continuation/recovery scenarios.
 `tests/loop-lifecycle.html` is an interactive browser-only fixture for actual controls.
 Packaged native-window IPC/restart QA and real-provider fixtures are separate checks.
+Released alpha.3 has a native `window.confirm` failure. The subsequent in-app fix was
+verified on 2026-10-25 in a separate arm64 desktop QA bundle: Cancel/Escape left
+SQLite attempts and evidence unchanged, Confirm retry completed the interrupted
+mock run without replaying earlier steps, and the helper showed Interrupted,
+Running, Completed and Stopped correctly. This is not a new release or live-provider
+certification; installed alpha.3 is unchanged.

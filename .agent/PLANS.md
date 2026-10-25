@@ -1,5 +1,50 @@
 # DBC Active Plans
 
+## 2026-10-25 — Native Retry confirmation and lifecycle status
+
+Status: implemented, locally verified and published in
+[PR #19](https://github.com/vistadi/dildin-build-control/pull/19) from
+`codex/native-retry-confirmation`. Maintainer approved fixes,
+desktop Cancel/Retry QA, commits, push and a separate PR; no merge or release.
+The previously approved installation report is committed as `1d4863b`.
+
+1. In-app confirmation bound to the current attempt; Cancel/Escape do no work — passed.
+2. Actual selected-run status replaces inferred Running — verified in native UI.
+3. 60 Rust tests, 11 lifecycle scenarios, frontend/native builds, existing smoke
+   gates and 375/768/1440 controls passed. Native Cancel/Escape retained identical
+   SQLite metadata/evidence; Confirm retry completed the interrupted mock loop once.
+4. Code `2ac67f5` and installation report `1d4863b` are pushed; PR #19 is open.
+   Created through the signed-in browser after connector HTTP 403. No permissions,
+   installed alpha.3, merge or release changed. Remote checks remain the PR gate.
+
+Evidence: `memory/worklog/2026-10-25-native-retry-confirmation.md`.
+
+## 2026-10-25 — Alpha.3 installation and native lifecycle QA
+
+Status: installation and bounded verification completed; native Retry defect found.
+The maintainer authorized updating the installed app, preserving rollback, and
+checking launch, Stop/Resume and recovery. No source fix, commit or push was authorized.
+
+1. Preserve the old app, SQLite and WebKit state in a persistent private backup —
+   completed with byte comparisons and a local `ROLLBACK.md`.
+2. Install the checksum-verified arm64 release and confirm native Settings identity —
+   completed for `v0.2.0-alpha.3` / `2904b20` under `/Applications`.
+3. Test mock-only Stop, stopped persistence and Resume — passed; all seven steps
+   completed once, with completed evidence unchanged across Resume.
+4. Restart an unfinished mock loop — recovered to Interrupted without auto-replay.
+   `Retry step` did not open confirmation or continue via mouse or Enter; continuation
+   after interruption is not certified. No live provider or forced-crash test ran.
+5. Preserve QA evidence and post-QA state, restore original user data and re-launch —
+   completed; alpha.3 remains installed/open with the original project and five
+   pre-existing failed loops. Original backup snapshots remain unchanged.
+
+Next implementation checkpoint: replace unsupported native `window.confirm` usage
+with explicit supported confirmation, fix the misleading Running helper badge, and
+retest Cancel/Retry in the packaged app. Requires a separate implementation request.
+The follow-up request approved this memory commit (`1d4863b`) and the separate fix
+checkpoint above; installation findings remain valid for released alpha.3.
+Evidence: `memory/worklog/2026-10-25-alpha3-install-and-native-qa.md`.
+
 ## 2026-10-25 — PR #18 merge and alpha.3 release
 
 Status: completed. PR #18 merged into `main` as `66dcf66`; unsigned prerelease
@@ -15,9 +60,9 @@ both release/memory commit groups, push to `main` and the new tag.
 4. Both macOS packaging jobs passed. All six downloaded assets match GitHub sizes
    and SHA-256 digests; both manifests report `OK` and both DMGs pass `hdiutil verify`.
    Static inspection confirms the two Mach-O architectures and embedded tag/SHA.
-5. This outcome-memory checkpoint records the verified results. The installed app
-   was not replaced; native-window end-to-end QA, signing and notarization remain
-   separate, unverified work.
+5. This release outcome-memory checkpoint did not replace the installed app.
+   The separately authorized installation/native QA is recorded above. Signing and
+   notarization remain unverified.
 
 Release: <https://github.com/vistadi/dildin-build-control/releases/tag/v0.2.0-alpha.3>.
 Evidence: `memory/worklog/2026-10-25-pr18-merge-and-alpha3-release.md`.
@@ -30,7 +75,7 @@ Status: implemented, locally verified and merged through
 approval excluded merge/release; the later explicit request authorized both.
 See `memory/worklog/2026-10-24-durable-stop-resume.md` for inventory, 60 Rust tests,
 frontend/native builds, browser QA and remaining native-window verification.
-The alpha.3 release is recorded above; no live provider or installation was performed.
+The alpha.3 release and later installation are recorded above; no live provider ran.
 
 1. Persist stopping/stopped/interrupted states; serialize transitions and distinguish
    queued work from an executing attempt. Never auto-replay work after interruption.

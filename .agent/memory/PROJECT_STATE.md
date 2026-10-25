@@ -6,10 +6,23 @@ Last verified repository/release update: 2026-10-25. PR #18 merged into `main` a
 CI, CodeQL, release quality and both macOS packaging jobs passed. All six downloaded
 assets match published SHA-256 digests; both DMG manifests and image integrity
 checks passed. Static binary inspection confirmed the architecture, build label
-and release SHA for both builds; neither application was launched or installed.
-Local runtime QA remains dated 2026-10-24. Installed-app observations below remain
-dated 2026-09-01 or earlier; live-provider and native-window end-to-end QA were not
-performed. The detailed release evidence is in the 2026-10-25 worklog.
+and release SHA for both builds. On 2026-10-25 the verified arm64 release was
+installed in `/Applications`, with the previous application and local data backed
+up. Native mock-only QA passed launch, Stop, stopped-state persistence, Resume
+without replay, and restart-to-Interrupted recovery without automatic execution.
+However, native `Retry step` does not show its confirmation or continue the run;
+post-interruption continuation is not certified for that released build. A subsequent
+fix on `codex/native-retry-confirmation` replaces native confirm with an in-app
+Cancel/Confirm retry panel and displays the actual selected run status. Separate
+arm64 desktop QA passed Cancel/Escape without mutation and confirmed Retry through
+completion without replaying completed steps. Code `2ac67f5` and the approved
+installation report `1d4863b` are pushed in open
+[PR #19](https://github.com/vistadi/dildin-build-control/pull/19).
+The fix is not merged or released; remote checks are tracked on that PR.
+Original user data was restored
+after preserving the QA session separately; alpha.3 remains installed and running.
+Live-provider, forced-crash and second-instance QA remain unperformed. See the
+2026-10-25 release and native-installation worklogs for evidence and limitations.
 
 ## Architecture
 
@@ -84,7 +97,8 @@ performed. The detailed release evidence is in the 2026-10-25 worklog.
   of an already registered loop operation, and late frontend results are ignored.
 - New diagnostics were checked in browser preview at 375/768/1440 widths with long
   fixture values, disabled stop state, keyboard navigation, and no console warnings or
-  errors. Native bridge behavior is covered by Rust/contract tests, not native-window QA.
+  errors. Rust/contract tests cover the native bridge; the later alpha.3 native-window
+  smoke check below covers mock-loop lifecycle and installed build identity only.
 - On 2026-09-01, visual QA compared the selected 1487×1058 concept and implementation in one raster,
   then verified 1487×1058 desktop, 1024×768 tablet, and 430×932 mobile states. No P0,
   P1, or P2 findings remain; the final browser console had no warnings or errors.
@@ -100,8 +114,10 @@ performed. The detailed release evidence is in the 2026-10-25 worklog.
 - Stop/Resume checks: 60 Rust tests, native debug build, TypeScript/Vite build, nine
   behavioral continuation/recovery scenarios and existing smoke gates passed. Real
   local-process cancellation, partial evidence and SQLite reopen were tested. Actual
-  browser controls were checked at 375/768/1440 widths. Packaged native-window IPC and
-  app restart were not exercised end-to-end. See `docs/STOP_RESUME.md`.
+  browser controls were checked at 375/768/1440 widths. Subsequent installed arm64
+  alpha.3 QA exercised native IPC and application restart with mock loops: Stop and
+  Resume passed, but Retry after interruption failed to open confirmation. See
+  `docs/STOP_RESUME.md` and the native-installation worklog for the exact scope.
   Publication rerun also passed all 60 Rust tests, formatting, native debug build,
   TypeScript/Vite and every listed smoke gate; JS measured 427,351 B / 116,557 B gzip,
   CSS 41,515 B / 8,330 B gzip. Both remain within the enforced budgets.
@@ -124,8 +140,9 @@ performed. The detailed release evidence is in the 2026-10-25 worklog.
   DMG SHA-256: arm64 `d5cf33c4669215d85b4ab17bc367747516bc7d63b3ae32207c610c1dfe38d229`;
   x64 `23abd17e29e8e3c1a02a8a6d02e75245dfb0b770bdb03da954d26925cdd8fa48`.
   Both Mach-O architecture headers and embedded alpha.3 label/`2904b20` full SHA
-  were statically verified. This is unsigned, non-notarized alpha distribution,
-  not native-window end-to-end or installation verification.
+  were statically verified. Distribution remains unsigned and non-notarized;
+  subsequent arm64 installation/native smoke results are recorded below, not a
+  certification of the Intel build or every native workflow.
 - The 2026-10-24 runtime commit `c4b4287` and memory commit `c8fe6dd` are pushed to
   `codex/native-execution-diagnostics` in now-merged
   [PR #16](https://github.com/vistadi/dildin-build-control/pull/16) targeting `main`.
@@ -157,17 +174,25 @@ performed. The detailed release evidence is in the 2026-10-25 worklog.
   system icon were built on 2026-09-01. The DMG is 10,184,739 bytes, passed
   `hdiutil verify`, and has SHA-256
   `27ed30f055736df654ad4dc1640f7b46333b36ecc947f9edefc46a2345cf3968`.
-- The current local bundle is at
+- The historical 2026-09-01 local bundle was built at
   `src-tauri/target/release/bundle/macos/Dildin Build Control.app`; the DMG is at
   `src-tauri/target/release/bundle/dmg/Dildin Build Control_0.2.0_aarch64.dmg`. This
-  task did not install the new bundle into `/Applications`.
-- `/Applications/Dildin Build Control.app` was last updated from the 2026-08-12 bundle;
-  its binary checksum then matched that build
-  (`e9beba9278391a62b08e0e9aa1714efec2fbc90ba44b6d73853002a01f4bfb3e`).
-  The previous bundle is recoverable at
-  `/private/tmp/dbc-desktop-backup-20260812-1438/Dildin Build Control.app`.
-- The previously installed 2026-08-12 application launched successfully and its native
-  process was observed. The current 2026-09-01 package is arm64 only and
+  earlier task did not install that bundle into `/Applications`.
+- `/Applications/Dildin Build Control.app` now runs the verified arm64
+  `v0.2.0-alpha.3` from `2904b206360cad628370639e9e85259063177eb5`, installed on
+  2026-10-25. Native Settings confirms tag, full SHA, clean sources, release profile,
+  architecture and executable path. Binary SHA-256:
+  `61a9c458b2d950254f0345b462279a3eade7e244ee8a790d92e2c0cd13b5f8e8`.
+- The previous installed app (numeric 0.2.0; exact prerelease not established),
+  matching SQLite and WebKit state are byte-verified backups at
+  `/Users/vitaliy/Library/Application Support/DBC Backups/2026-10-25-before-alpha3-y7oLQB`.
+  That app's observed binary hash was
+  `2bf1d685e991ac8bf3135b90feb4614f0a2e12d9e624b00dc1270fcfb522f036`, superseding
+  the stale August installed-binary observation. `ROLLBACK.md` explains coordinated
+  application/data rollback. Private QA evidence and post-QA data are preserved
+  separately inside the same backup; original user state was restored before the
+  final alpha.3 launch. No Gatekeeper or quarantine protections were changed.
+- The historical 2026-09-01 local package was arm64 only and
   ad-hoc/linker-signed with no Team ID. Strict Developer ID, Gatekeeper, and
   notarization claims are not valid.
 - Apple Developer ID credentials are not present. No current build may be described as
@@ -190,6 +215,20 @@ performed. The detailed release evidence is in the 2026-10-25 worklog.
 ## Known limitations
 
 - The product remains an early alpha.
+- Installed arm64 alpha.3 cannot currently continue an interrupted loop through
+  `Retry step`: mouse and keyboard activation produce no confirmation or new attempt.
+  That release's handler uses `window.confirm` (`src/App.tsx`); locked Wry 0.55.1 macOS
+  WKUIDelegate has no JavaScript-confirm handler, consistent with the observed
+  failure. The subsequent branch fix passed native mock Cancel/Retry QA, but is not
+  included in installed alpha.3. No fix was applied during the earlier installation.
+- Released alpha.3's Harness Runs helper badge incorrectly says Running for
+  stopped/interrupted legacy loops. The branch fix now uses the selected loop's
+  actual status, falling back to the HarnessRun status only without a selected loop.
+  Desktop QA verified Interrupted, Running, Completed and Stopped; browser tests
+  also cover approval/budget/pending states. No new release was created.
+- Native installation QA used the advanced legacy-loop path and mock adapters only.
+  It did not certify live provider cancellation, crash-surviving descendants,
+  second-instance exclusion, Intel launch, or the complete Guided Harness journey.
 - The 2026-10-11 pipe-draining finding was addressed on 2026-10-24 and tested with
   deterministic local processes exceeding pipe capacity. Other subprocess paths
   (for example Git/MCP helpers) were not migrated wholesale. Non-Unix descendant
@@ -220,8 +259,10 @@ performed. The detailed release evidence is in the 2026-10-25 worklog.
 
 Next priorities after the verified 2026-10-25 alpha.3 release:
 
-1. Validate packaged native-window IPC/restart/second-launch behavior and pinned Kimi/Qwen contracts;
-   keep existing blocked/zero-tool profiles until replacement safeguards are verified.
+1. Review PR #19 and its remote checks, without merge or release until separately
+   approved. Then cover real-process cancellation, forced recovery
+   and second-instance behavior.
+   Validate pinned Kimi/Qwen contracts without weakening blocked/zero-tool profiles.
 2. Prototype one interactive agent integration (Kimi ACP or Codex app-server) with
    DBC-owned approval, cancellation, session identity, and evidence. ACP is not MCP
    and is not an operating-system sandbox.
@@ -229,8 +270,8 @@ Next priorities after the verified 2026-10-25 alpha.3 release:
    protocol conformance rather than merely changing the advertised protocol version.
 4. Split touched Run, Evidence, Connections, and Provider modules as needed for these
    changes; complete English-only accessibility testing.
-5. Verify the new build identity on packaged artifacts; configure Apple credentials and verify both
-   architectures before claiming signed/notarized distribution.
+5. Preserve the verified arm64 build identity and rollback procedure; configure Apple
+   credentials and verify both architectures before claiming signed/notarized distribution.
 
 Detailed proposals, source dates, uncertainties, and acceptance criteria:
 `worklog/2026-10-11-current-ecosystem-improvements.md`.

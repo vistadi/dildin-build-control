@@ -639,3 +639,38 @@ Do not move existing tags, weaken checks, inject empty Apple signing variables,
 or claim signing/notarization. Verify both packaging jobs and published checksum
 manifests before recording success. Stop/Retry and older-instance compatibility
 warnings remain part of the release notes.
+
+## 2026-10-25 — Use application-owned Retry confirmation
+
+Status: accepted
+
+### Context
+
+Packaged alpha.3 native QA reproduced a Retry no-op because the browser-native
+confirmation was not displayed. The maintainer requested a fix, desktop QA and PR,
+explicitly excluding merge and release.
+
+### Decision
+
+Use an inline English confirmation in the existing lifecycle component. Focus
+Cancel first; Cancel/Escape perform no IPC. Bind confirmation to the loop, workspace,
+step, lifecycle and attempt budget; invalidate changed targets/pending actions and
+consume confirmation before invoking Retry. Preserve backend approval/budget locks.
+Show the selected loop's actual status instead of deriving Running from existence.
+
+### Rationale
+
+Application-rendered controls behave consistently in native WebView and browser,
+reuse Dibi tokens, and avoid a new native dialog dependency or permissions. Explicit
+Retry still warns about repeated side effects and never substitutes for approval.
+
+### Affected modules
+
+LoopLifecycleControls, loop lifecycle UI helpers, Loop Console, regression fixtures
+and Stop/Resume operator documentation. No Rust execution or persistence change.
+
+### Consequences
+
+Separate arm64 desktop mock QA passed Cancel/Escape and explicit Retry. Installed
+alpha.3 remains unchanged until a separately approved build/update. This extends the
+2026-10-24 durable-lifecycle decision without weakening its guarantees or boundaries.

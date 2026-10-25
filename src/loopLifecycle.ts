@@ -1,4 +1,16 @@
-import type { ApprovalRequest, LoopRunSnapshot } from "./types";
+import type { ApprovalRequest, HarnessRun, LoopRunSnapshot } from "./types";
+
+export function operatorRunStatus(loop: Pick<LoopRunSnapshot, "status"> | null, harness?: Pick<HarnessRun, "status">): string {
+  return loop?.status ?? harness?.status ?? "waiting";
+}
+
+// Confirmation is valid only for the exact retryable attempt the operator inspected.
+export function retryConfirmationKey(run: LoopRunSnapshot): string | null {
+  if (loopContinuation(run).action !== "retry") return null;
+  const step = run.steps[run.activeStepIndex];
+  return JSON.stringify([run.id, run.projectPath, run.status, run.activeStepIndex,
+    step.id, step.status, step.attemptCount ?? 0, step.maxAttempts ?? 3]);
+}
 
 export function recoverLoopApproval(run: LoopRunSnapshot, approvals: ApprovalRequest[]): ApprovalRequest[] {
   const step = run.steps[run.activeStepIndex];
