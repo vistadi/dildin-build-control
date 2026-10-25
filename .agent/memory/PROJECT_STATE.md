@@ -3,11 +3,18 @@
 Current source publication (2026-10-25): open/unmerged
 [PR #20](https://github.com/vistadi/dildin-build-control/pull/20) from
 `codex/readiness-evidence-integrity` to main contains `cbae019` (readiness/YAML),
-`19baab0` (evidence/finding/non-Git scope) and `de3e62a` (verification memory).
-Creation verified by API at initial head `de3e62a`, base `0a05edf`, 35 changed files;
-this documentation-only follow-up records publication. CI `40231506333` and
-CodeQL `40231506334` were in progress on that initial head; latest-head checks
-still require verification, not assumed green. Fresh local checks pass: 75 Rust tests,
+`19baab0` (evidence/finding/non-Git scope), `de3e62a` (verification memory) and
+`face710` (publication record). API and remote-ref verification confirmed the tested
+head `face7108a2a4b9af1c07608aa4599d805a4332ca`, base `0a05edf`, 35 changed files.
+At 2026-10-25 20:42 UTC, exact-head CI `40231602459` and CodeQL `40231602444`
+both succeeded. All five check runs passed; aggregate CodeQL reports no new alerts
+in changed code. CI confirms 75 Rust tests, formatting, frontend build/smokes and
+deterministic EvidencePack verification. Review threads are empty; annotations
+are runner-migration notices only. No implementation fix was required. The maintainer
+subsequently approved this three-file documentation checkpoint and push to the same
+feature branch. Its new-head checks are separate from the verified `face710` results;
+see `worklog/2026-10-25-pr20-ci-and-codeql.md`.
+Fresh pre-publication local checks pass: 75 Rust tests,
 offline native build, TypeScript/Vite, ten smoke suites and formatting; the isolated
 readiness-only snapshot additionally passes 63 tests. Normal SSH push and browser
 PR creation succeeded after connector HTTP 403; no permissions were changed.

@@ -1,5 +1,21 @@
 # DBC Active Plans
 
+## 2026-10-25 — Verify PR #20 CI and CodeQL
+
+Status: completed at head `face7108a2a4b9af1c07608aa4599d805a4332ca`.
+CI `40231602459` and CodeQL `40231602444` succeeded; all five check runs passed,
+including aggregate CodeQL with no new alerts in changed code. CI confirms 75
+Rust tests, formatting, frontend build/smokes and deterministic EvidencePack checks.
+The temporary missing-Rust result cleared after analysis completed. Only runner
+migration notices remain; review threads are empty. No fix, commit or push needed.
+PR remains open/unmerged; main, installed alpha.4 and live fixtures are unchanged.
+No new AI calls, merge or release. The maintainer subsequently approved one
+documentation-only checkpoint and push of PLANS, PROJECT_STATE and the verification
+worklog to the same feature branch. This checkpoint records results for `face710`;
+its own new-head CI must be evaluated separately, not assumed green.
+
+Evidence: `memory/worklog/2026-10-25-pr20-ci-and-codeql.md`.
+
 ## 2026-10-25 — Publish readiness and evidence fixes for review
 
 Status: published as PR #20 on `codex/readiness-evidence-integrity`, open/unmerged.
@@ -16,9 +32,10 @@ PR to main; no new AI calls, merge, release or installed-app update.
    open/non-draft/unmerged. No auto-merge or tags. This memory-only follow-up records
    publication; runtime sources are unchanged.
 
-CI `40231506333` and CodeQL `40231506334` were in progress on initial head `de3e62a`;
-this is not a green-CI claim. Verify checks on the latest head before any separately
-authorized merge. PR: https://github.com/vistadi/dildin-build-control/pull/20
+CI `40231506333` and CodeQL `40231506334` were in progress on initial head `de3e62a`.
+Publication-record commit `face710` was subsequently pushed; its exact-head checks
+are now verified in the plan above. Any merge still needs separate authorization.
+PR: https://github.com/vistadi/dildin-build-control/pull/20
 
 Evidence: `memory/worklog/2026-10-25-readiness-evidence-publication.md`.
 
