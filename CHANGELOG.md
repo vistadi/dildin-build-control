@@ -12,6 +12,46 @@ The project follows [Semantic Versioning](https://semver.org/) while release sta
 - Installed-version Kimi/Qwen fixtures and approved remote OAuth MCP conformance.
 - A compact Guided Run demo video or GIF.
 
+## [0.2.0-alpha.5] - 2026-10-25
+
+### Fixed
+
+- Ordinary-project readiness no longer requires DBC/Tauri distribution artifacts
+  inside the target workspace. Task scope, budget, controlled baseline, provider
+  contracts, operator approval, ledger and preflight gates remain required.
+- Node readiness helpers structurally parse native-saved and legacy provider YAML,
+  preserve configuration metadata during profile round trips, and reject ambiguous
+  or invalid input. Explicit bounded README micro-task files are supported.
+- Real QA, review, security and acceptance stages receive current-run evidence
+  references and must return matching citations. Step evidence v2, SHA-256 pins in
+  SQLite, artifact checks and final-chain validation reject missing, stale, foreign
+  or tampered records instead of treating expected evidence as execution proof.
+- Informational redaction events no longer become automatic high-severity security
+  findings. Concrete credential indicators remain masked and blocking, with repeated
+  indicators deduplicated per source and kind.
+- New non-Git runs capture a pinned pre-execution filesystem baseline and check
+  actual changed paths against allow/deny scope before and after executable steps.
+  Incomplete, incompatible or unsafe snapshots fail closed instead of passing with
+  an empty Git diff.
+
+### Compatibility and verification boundaries
+
+- SQLite changes are additive. Legacy runs without baseline pins or evidence v2
+  remain readable but are not silently recertified; preserve their evidence and use
+  a new explicitly approved run for the new guarantees.
+- Evidence citations bind recorded bytes, not actual provider tool reads or correct
+  reasoning. Filesystem checks are bounded comparisons, not an OS sandbox or a
+  transient-write journal; sensitive paths use metadata only and generated DBC
+  namespaces are excluded. See `docs/REAL_PROJECT_READINESS.md` for exact limits.
+- PR validation passed 75 Rust tests, formatting, frontend build, all ten smoke
+  suites and deterministic EvidencePack checks. Local process fixtures exercise
+  failed citations, Retry without replay, acceptance, tampering and scope enforcement.
+  No new live-provider invocation was used; the historical live test remains blocked.
+- This remains an unsigned, non-notarized macOS prerelease for Apple Silicon and
+  Intel. Verify published checksums and retain matching app/data rollback copies.
+  No installation, packaged-window, forced-crash or new live-provider certification
+  is implied by these automated checks. Stop is not rollback; Retry can repeat effects.
+
 ## [0.2.0-alpha.4] - 2026-10-25
 
 ### Fixed

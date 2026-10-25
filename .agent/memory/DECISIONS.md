@@ -788,6 +788,9 @@ new desktop/live fixture is needed; installed alpha.4 and failed evidence are in
 
 Status: accepted
 
+The publication-only restriction was superseded for PR #20 by the separately
+authorized merge/alpha.5 release decision below. Other execution boundaries remain.
+
 ### Context and decision
 
 The maintainer explicitly requested commits of all verified readiness/evidence
@@ -803,3 +806,37 @@ Affects Git publication and persistent project memory only; runtime contracts
 remain the two accepted decisions above. No force-push, amended history, auto-merge,
 tag, release dispatch or new model invocation. Record actual commit/PR identities
 and leave merge/release for separate authorization.
+
+## 2026-10-25 — Merge readiness/evidence fixes and release alpha.5
+
+Status: accepted
+
+### Context
+
+The maintainer requested merge of PR #20 and a new release after all five checks
+passed on documentation head `f6ff4da`. No new AI calls are allowed. This supersedes
+the preceding publication-only restriction for this merge/release operation, not
+the evidence contracts or restrictions on live execution and installed-app changes.
+
+### Decision
+
+Merge preserving all five PR commits, then create the next unused annotated tag
+`v0.2.0-alpha.5` through the existing unsigned arm64/x64 workflow. Numeric package,
+Tauri and Cargo versions stay at `0.2.0`; the build label carries the prerelease tag.
+The maintainer explicitly approved both release-preparation/outcome-memory commit
+inventories, push to main and the new tag. Do not change old tags or install the app.
+
+### Rationale and affected modules
+
+Readiness, native evidence handoff, typed findings and non-Git comparison passed
+deterministic local and CI validation. Publish these fixes without claiming a new
+live-provider success, full tool-read attestation, filesystem sandbox or signing.
+Affects CHANGELOG, project memory and the existing Git/release workflow operation;
+no additional runtime or signing configuration changes.
+
+### Consequences
+
+Verify release quality, both architectures and published assets/checksums. Legacy
+runs remain readable but are not recertified. Keep the historical failed live test,
+seven-of-eight call accounting, installed alpha.4 and private rollback data intact.
+New installation or live tests require separate authorization.

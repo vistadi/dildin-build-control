@@ -1,25 +1,24 @@
 # DBC Project State
 
-Current source publication (2026-10-25): open/unmerged
-[PR #20](https://github.com/vistadi/dildin-build-control/pull/20) from
-`codex/readiness-evidence-integrity` to main contains `cbae019` (readiness/YAML),
-`19baab0` (evidence/finding/non-Git scope), `de3e62a` (verification memory) and
-`face710` (publication record). API and remote-ref verification confirmed the tested
-head `face7108a2a4b9af1c07608aa4599d805a4332ca`, base `0a05edf`, 35 changed files.
-At 2026-10-25 20:42 UTC, exact-head CI `40231602459` and CodeQL `40231602444`
-both succeeded. All five check runs passed; aggregate CodeQL reports no new alerts
-in changed code. CI confirms 75 Rust tests, formatting, frontend build/smokes and
-deterministic EvidencePack verification. Review threads are empty; annotations
-are runner-migration notices only. No implementation fix was required. The maintainer
-subsequently approved this three-file documentation checkpoint and push to the same
-feature branch. Its new-head checks are separate from the verified `face710` results;
-see `worklog/2026-10-25-pr20-ci-and-codeql.md`.
-Fresh pre-publication local checks pass: 75 Rust tests,
-offline native build, TypeScript/Vite, ten smoke suites and formatting; the isolated
-readiness-only snapshot additionally passes 63 tests. Normal SSH push and browser
-PR creation succeeded after connector HTTP 403; no permissions were changed.
-No new AI calls, merge, release or installed-app update. Main remains `0a05edf`.
-This is separate from the released state below.
+Current source (2026-10-25): [PR #20](https://github.com/vistadi/dildin-build-control/pull/20)
+merged into main at `a08b3625fb5a4de89a45552fb62de6dd5a9ebfe8`, preserving the five
+readiness/evidence and memory commits through `f6ff4da`. Merge confirmed by API at
+20:54:24 UTC; local main fast-forwarded without history rewrites. Exact-head CI
+`40232300734` and CodeQL `40232300445` passed, all five checks successful and no new
+CodeQL alerts in changed code. CI confirms 75 Rust tests, formatting, frontend
+build/smokes and deterministic EvidencePack verification. Review threads are empty;
+remaining job annotations are informational runner-migration notices. Earlier
+`face710` checks also passed; no source fix was required for either verification.
+
+Release `v0.2.0-alpha.5` is being prepared through the existing unsigned arm64/x64
+workflow. The maintainer explicitly approved the five-file release-preparation
+commit, a three-file outcome-memory commit, push to main and the new tag. The tag
+was confirmed absent; publication and artifact checks are not yet complete. No new
+AI calls, installed-app changes or live-fixture rerun. Installed/latest verified
+release remains alpha.4. See `worklog/2026-10-25-pr20-merge-and-alpha5-release.md`.
+Local implementation validation passed 75 Rust tests, offline native build,
+TypeScript/Vite, ten smoke suites and formatting; the readiness-only snapshot
+additionally passed 63 tests. Source/CI validation is not live-provider certification.
 
 Last verified repository/release update: 2026-10-25. PR #19 merged into `main` as
 `4668e8122b89d9d77a50e6a8f0911cd679674179` after all five exact-head CI/CodeQL checks
@@ -49,7 +48,7 @@ See `worklog/2026-10-25-alpha4-install-and-native-qa.md` for verification and ro
 The initial real-example attempt reproduced two alpha.4 blockers before AI execution:
 mandatory DBC/Tauri packaging inside an ordinary target project, and Node helpers
 misreading native-saved YAML as zero providers. The maintainer subsequently approved
-both fixes and adding `yaml` to DBC only. The feature-branch source now separates
+both fixes and adding `yaml` to DBC only. The merged source now separates
 distribution evidence from task readiness and shares strict structural YAML parsing
 across ten helpers. Human approval, bounded scope/budget, baseline, ledger and
 preflight guards remain. Readiness regression tests, all existing smoke suites,
@@ -79,7 +78,7 @@ not reasons to disable redaction or waive evidence requirements.
 Independent file comparisons and both local assertions still pass. Safe mock was
 verified, QA closed, and before/after snapshots preserved privately. Installed
 alpha.4 binary and original SQLite were byte-unchanged. Source fixes are now in the
-feature-branch Git history, not the installed release. See
+main Git history, not the installed release. See
 `worklog/2026-10-25-real-provider-retry-after-login.md` for final test evidence and
 `worklog/2026-10-25-generic-project-readiness-fix.md` for implementation checks.
 

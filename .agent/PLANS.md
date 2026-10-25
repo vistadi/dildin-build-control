@@ -1,24 +1,46 @@
 # DBC Active Plans
 
+## 2026-10-25 — Merge PR #20 and release alpha.5
+
+Status: PR #20 merged; alpha.5 release preparation in progress.
+The maintainer requested merge/release with no new AI calls, then explicitly
+approved both release-preparation/outcome-memory commits, push to main and the new
+`v0.2.0-alpha.5` tag. Installed alpha.4 and historical live evidence stay untouched.
+
+1. Recheck exact head `f6ff4da`, all five successful CI/CodeQL checks, empty review
+   threads and mergeability — done. No new CodeQL alerts in changed code.
+2. Merge preserving five commits, fast-forward local main — done: `a08b362`.
+3. Prepare changelog/memory, validate metadata, commit/push and create unused tag.
+4. Verify release quality, both macOS packages, six assets and SHA-256 manifests.
+5. Record actual results in the approved memory-only outcome commit and push.
+
+Latest published release remains alpha.4 until alpha.5 publication is verified.
+No signing/workflow changes, bypasses, installation or provider execution.
+Evidence: `memory/worklog/2026-10-25-pr20-merge-and-alpha5-release.md`.
+
 ## 2026-10-25 — Verify PR #20 CI and CodeQL
 
-Status: completed at head `face7108a2a4b9af1c07608aa4599d805a4332ca`.
+Status: completed first at `face710`, then rechecked on documentation head `f6ff4da`.
 CI `40231602459` and CodeQL `40231602444` succeeded; all five check runs passed,
 including aggregate CodeQL with no new alerts in changed code. CI confirms 75
 Rust tests, formatting, frontend build/smokes and deterministic EvidencePack checks.
 The temporary missing-Rust result cleared after analysis completed. Only runner
 migration notices remain; review threads are empty. No fix, commit or push needed.
-PR remains open/unmerged; main, installed alpha.4 and live fixtures are unchanged.
+PR remained open/unmerged during verification; installed alpha.4 and live fixtures
+were unchanged. The later authorized merge/release is recorded above.
 No new AI calls, merge or release. The maintainer subsequently approved one
 documentation-only checkpoint and push of PLANS, PROJECT_STATE and the verification
 worklog to the same feature branch. This checkpoint records results for `face710`;
-its own new-head CI must be evaluated separately, not assumed green.
+its own CI `40232300734` and CodeQL `40232300445` were separately verified green,
+including all five checks and no new CodeQL alerts. No fix or additional CI commit
+was needed. Documentation checkpoint `f6ff4da` was committed and pushed.
 
 Evidence: `memory/worklog/2026-10-25-pr20-ci-and-codeql.md`.
 
 ## 2026-10-25 — Publish readiness and evidence fixes for review
 
-Status: published as PR #20 on `codex/readiness-evidence-integrity`, open/unmerged.
+Status: published as PR #20 on `codex/readiness-evidence-integrity`, subsequently
+merged under the separately authorized release plan above.
 Maintainer explicitly approved all verified readiness/evidence commits, push and a
 PR to main; no new AI calls, merge, release or installed-app update.
 
@@ -34,7 +56,8 @@ PR to main; no new AI calls, merge, release or installed-app update.
 
 CI `40231506333` and CodeQL `40231506334` were in progress on initial head `de3e62a`.
 Publication-record commit `face710` was subsequently pushed; its exact-head checks
-are now verified in the plan above. Any merge still needs separate authorization.
+were verified separately, followed by green checks on `f6ff4da`. Separate merge
+authorization was subsequently granted in the release plan above.
 PR: https://github.com/vistadi/dildin-build-control/pull/20
 
 Evidence: `memory/worklog/2026-10-25-readiness-evidence-publication.md`.
