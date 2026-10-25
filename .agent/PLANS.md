@@ -2,7 +2,7 @@
 
 ## 2026-10-25 — Publish readiness and evidence fixes for review
 
-Status: publication in progress on `codex/readiness-evidence-integrity`.
+Status: published as PR #20 on `codex/readiness-evidence-integrity`, open/unmerged.
 Maintainer explicitly approved all verified readiness/evidence commits, push and a
 PR to main; no new AI calls, merge, release or installed-app update.
 
@@ -10,9 +10,15 @@ PR to main; no new AI calls, merge, release or installed-app update.
 2. Re-run local checks and verify the readiness-only staged snapshot — done:
    75 combined Rust tests; 63 readiness-only tests; TypeScript/Vite, ten smoke
    suites, offline native build and formatting passed.
-3. Readiness `cbae019` and evidence `19baab0` committed; memory checkpoint next.
-4. Push only the feature branch, create/attach PR, verify exact refs/status and
-   record publication. Do not enable auto-merge or create tags.
+3. Readiness `cbae019`, evidence `19baab0` and memory `de3e62a` committed/pushed.
+4. PR #20 created via signed-in browser after connector HTTP 403, attached and
+   verified by API: base main `0a05edf`, initial head `de3e62a`, 35 changed files,
+   open/non-draft/unmerged. No auto-merge or tags. This memory-only follow-up records
+   publication; runtime sources are unchanged.
+
+CI `40231506333` and CodeQL `40231506334` were in progress on initial head `de3e62a`;
+this is not a green-CI claim. Verify checks on the latest head before any separately
+authorized merge. PR: https://github.com/vistadi/dildin-build-control/pull/20
 
 Evidence: `memory/worklog/2026-10-25-readiness-evidence-publication.md`.
 

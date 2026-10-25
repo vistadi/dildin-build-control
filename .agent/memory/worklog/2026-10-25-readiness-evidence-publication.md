@@ -80,6 +80,29 @@ only for publication. Existing AI/merge/release restrictions remain active.
 
 ## Publication result
 
-Implementation commits exist locally; documentation checkpoint and push/PR are
-pending. Once published, inspect CI and CodeQL on the exact PR head before
-considering any separately authorized merge.
+- Documentation checkpoint `de3e62afe75733f7badc3f0b43ed7dbbdbb79d97`
+  (`docs(memory): record readiness and evidence verification`) created after staged
+  review: nine memory files, clean diff check and zero bounded credential matches.
+- Normal SSH push created `origin/codex/readiness-evidence-integrity` at `de3e62a`.
+  `git ls-remote` verified both that SHA and unchanged main `0a05edf`.
+- Connector PR creation returned HTTP 403 (resource inaccessible to integration).
+  Existing signed-in browser session successfully submitted the ordinary GitHub
+  PR form. No auth, permissions, protections or connector settings were changed;
+  no Copilot title generation/review was invoked.
+- Created https://github.com/vistadi/dildin-build-control/pull/20 at
+  2026-10-25T20:35:39Z, title `fix: harden project readiness and evidence integrity`.
+  Attached to this chat. Independent API verification: open, non-draft,
+  merged=false; base main at `0a05edf`; head `codex/readiness-evidence-integrity`
+  at `de3e62a`; three commits and 35 changed files. The reported temporary merge
+  preview SHA is not a merge into main.
+- Initial-head CI `40231506333` and CodeQL `40231506334` are in progress. No
+  successful remote checks or alert-free result is claimed. This final memory-only
+  checkpoint will have its own head checks, which must be inspected separately.
+- Final follow-up inventory: only PLANS, PROJECT_STATE and this worklog;
+  message `docs(memory): record readiness and evidence PR publication`.
+  No amend/force-push, main push, merge, auto-merge, tag, release or model CLI call.
+
+The initial 34 pending files are now preserved in Git with this added publication
+worklog (35 changed paths relative to main). Runtime source did not change during
+publication. Recommended next action: inspect CI/CodeQL and review on the exact
+latest PR head; request separate approval before merge/release or any live test.

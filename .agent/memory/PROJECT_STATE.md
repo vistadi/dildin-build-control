@@ -1,12 +1,18 @@
 # DBC Project State
 
-Current source publication (2026-10-25): feature branch
-`codex/readiness-evidence-integrity` contains `cbae019` (readiness/YAML) and
-`19baab0` (evidence/finding/non-Git scope). Fresh local checks pass: 75 Rust tests,
+Current source publication (2026-10-25): open/unmerged
+[PR #20](https://github.com/vistadi/dildin-build-control/pull/20) from
+`codex/readiness-evidence-integrity` to main contains `cbae019` (readiness/YAML),
+`19baab0` (evidence/finding/non-Git scope) and `de3e62a` (verification memory).
+Creation verified by API at initial head `de3e62a`, base `0a05edf`, 35 changed files;
+this documentation-only follow-up records publication. CI `40231506333` and
+CodeQL `40231506334` were in progress on that initial head; latest-head checks
+still require verification, not assumed green. Fresh local checks pass: 75 Rust tests,
 offline native build, TypeScript/Vite, ten smoke suites and formatting; the isolated
-readiness-only snapshot additionally passes 63 tests. Memory commit, push and PR
-are in progress under explicit authorization. No new AI calls, merge, release or
-installed-app update. This is separate from the released state below.
+readiness-only snapshot additionally passes 63 tests. Normal SSH push and browser
+PR creation succeeded after connector HTTP 403; no permissions were changed.
+No new AI calls, merge, release or installed-app update. Main remains `0a05edf`.
+This is separate from the released state below.
 
 Last verified repository/release update: 2026-10-25. PR #19 merged into `main` as
 `4668e8122b89d9d77a50e6a8f0911cd679674179` after all five exact-head CI/CodeQL checks
@@ -40,7 +46,8 @@ both fixes and adding `yaml` to DBC only. The feature-branch source now separate
 distribution evidence from task readiness and shares strict structural YAML parsing
 across ten helpers. Human approval, bounded scope/budget, baseline, ledger and
 preflight guards remain. Readiness regression tests, all existing smoke suites,
-TypeScript/Vite build and 63 Rust tests pass; remote CI has not run for these edits.
+TypeScript/Vite build and 63 Rust tests passed at the readiness checkpoint; current
+combined checks and remote publication status are recorded above.
 
 A separate arm64 debug bundle (`DBC Readiness QA`, isolated app identifier) reached
 native ready-to-run in a fresh README project after actual Sync config. Codex plan
@@ -357,8 +364,8 @@ See `worklog/2026-10-25-evidence-integrity-and-non-git-scope.md` and
 
 Next priorities after the verified 2026-10-25 alpha.4 release:
 
-0. Complete the authorized feature-branch publication, then inspect exact-head
-   CI/CodeQL and review the readiness/YAML/evidence changes. The three live-example
+0. Inspect exact-head CI/CodeQL and review PR #20's readiness/YAML/evidence changes.
+   The authorized feature-branch publication is complete. The three live-example
    blockers are locally fixed/tested, not installed or live-retested. Obtain fresh
    authorization before desktop/live QA, merge or release. Preserve failed evidence
    and the seven-of-eight call count.
