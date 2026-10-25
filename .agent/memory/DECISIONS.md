@@ -599,3 +599,43 @@ The maintainer subsequently approved the two proposed implementation/memory comm
 push and a new PR, explicitly without merge or release. Runtime commit `5110d0a` is
 published in PR #18. This changes publication authority only; the lifecycle decision,
 compatibility warnings and outstanding native-window verification remain unchanged.
+
+## 2026-10-25 — Merge Stop/Resume and retain the unsigned alpha release channel
+
+Status: accepted
+
+### Context
+
+The maintainer explicitly requested merge and release after the PR #18 CI/CodeQL
+review. The previous publication-only restriction is superseded for this operation;
+historical implementation and publication decisions remain recorded above.
+
+### Decision
+
+Merge PR #18 preserving its two commits, then prepare the next unused prerelease
+tag `v0.2.0-alpha.3` through the existing quality-gated arm64/x64 workflow. Keep
+package, Tauri and Cargo versions at `0.2.0`, with the prerelease tag embedded as
+the build label. Required new local commits remain subject to explicit inventory
+approval under the project Git policy.
+
+The maintainer subsequently approved both proposed release-preparation/outcome
+memory commit inventories, push to `main` and creation of the alpha.3 tag on
+2026-10-25. Installed-app replacement remains excluded.
+
+### Rationale
+
+The PR's five exact-head checks passed and no review threads were returned.
+Developer ID credentials and packaged native-window end-to-end verification are
+not available; these limits require an honest alpha release, not a stable claim.
+
+### Affected modules
+
+Release changelog, signing guide, Git tag/release workflow and persistent memory.
+No runtime implementation, provider permissions or installed application change.
+
+### Consequences
+
+Do not move existing tags, weaken checks, inject empty Apple signing variables,
+or claim signing/notarization. Verify both packaging jobs and published checksum
+manifests before recording success. Stop/Retry and older-instance compatibility
+warnings remain part of the release notes.

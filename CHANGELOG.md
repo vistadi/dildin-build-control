@@ -12,6 +12,41 @@ The project follows [Semantic Versioning](https://semver.org/) while release sta
 - Installed-version Kimi/Qwen fixtures and approved remote OAuth MCP conformance.
 - A compact Guided Run demo video or GIF.
 
+## [0.2.0-alpha.3] - 2026-10-25
+
+### Added
+
+- Durable Stop/Resume states, interrupted-run recovery without automatic replay,
+  explicit Retry, and an exclusive SQLite lease for cooperating runtime instances.
+- Persisted attempt budgets, archived evidence on Retry, and restored pending
+  approvals when reopening a run.
+- Native build identity in Settings and process activity diagnostics with Stop.
+- Behavioral lifecycle coverage in both CI and release quality gates.
+
+### Fixed
+
+- CLI execution now drains stdout/stderr concurrently with bounded output, timeout,
+  cancellation, child reaping, and partial evidence. Incomplete output fails acceptance.
+- Provider discovery probes have bounded execution time and output; Qwen setup
+  diagnostics check the required plan/stream and budget options.
+- Stop confirmation waits for owned execution to settle, and late results cannot
+  silently clear Stop. Resume cannot bypass approvals or retry failed/interrupted work.
+- A test assertion no longer includes raw process stderr in failure diagnostics.
+- Signing documentation now matches the unsigned release workflow: Apple signing
+  and notarization variables are omitted, not passed as empty values.
+
+### Release boundaries
+
+- This remains an unsigned, non-notarized macOS prerelease for Apple Silicon and Intel.
+- Stop is not rollback; inspect workspace effects and crash-surviving or escaped
+  processes before Retry. Multi-command retries can repeat earlier effects.
+- Close older DBC instances before running this version: they do not honor the new
+  runtime lease or lifecycle states.
+- Packaged native-window IPC, restart/crash recovery and second-launch UX still
+  require manual end-to-end verification. Automated coverage is not that verification.
+- Kimi execution, Qwen controlled-write, API execution and unverified remote MCP
+  integrations remain restricted; no live-provider certification is implied.
+
 ## [0.2.0-alpha.2] - 2026-09-01
 
 ### Added

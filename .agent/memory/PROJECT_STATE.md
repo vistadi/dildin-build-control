@@ -1,12 +1,16 @@
 # DBC Project State
 
-Last verified source/build/test update: 2026-10-24. PR #16 is merged into remote
-`main` at `3b21f74`. Follow-up Stop/Resume runtime commit `5110d0a` is locally verified
-and pushed on `codex/durable-stop-resume` in open PR #18, based on that merge. This
-approved memory checkpoint records publication. Final-head CI/CodeQL and review are
-not certified here; merge and release are explicitly not authorized. The distribution and
-installation observations below remain dated 2026-09-01 or earlier; no new release,
-installation, live-provider fixture or native-window end-to-end QA was performed.
+Last verified repository/CI update: 2026-10-25. PR #18 is merged into remote `main`
+at `66dcf66de3d1d67856c721c2a167b340d3747b10`, including PR #16 and durable
+Stop/Resume. All five PR checks passed at head `9c1cebc`; aggregate CodeQL reported
+no new alerts and no reviews or review threads were returned. The maintainer's
+latest request authorizes merge and release. `v0.2.0-alpha.3` is being prepared;
+both proposed release/memory commits, push to `main` and the new tag are explicitly
+approved. Post-merge CI and both CodeQL analyses passed at `66dcf66`.
+The release is not yet tagged or published at this checkpoint. Local build/test evidence
+remains dated 2026-10-24. Installation observations below remain dated 2026-09-01
+or earlier; no installed-app replacement, live-provider fixture or native-window
+end-to-end QA was performed.
 
 ## Architecture
 
@@ -105,12 +109,13 @@ installation, live-provider fixture or native-window end-to-end QA was performed
 
 ## Distribution state
 
-- Stop/Resume runtime `5110d0ae36f4962a0e28606ec153f96ec8c00d07` is pushed to
-  `codex/durable-stop-resume`, with open
-  [PR #18](https://github.com/vistadi/dildin-build-control/pull/18) targeting `main`.
-  Creation used the signed-in browser after connector HTTP 403, without changing
-  permissions. The approved second commit contains the six memory files. This is
-  source publication only: no merge, auto-merge, release or installation.
+- [PR #18](https://github.com/vistadi/dildin-build-control/pull/18) merged into `main`
+  on 2026-10-25 as `66dcf66`, preserving runtime `5110d0a` and memory `9c1cebc`.
+  Exact-head CI `40127899814` and CodeQL `40127899761` passed, as did aggregate
+  CodeQL check `120973402414` (no new alerts). Normal signed-in browser merge
+  succeeded after connector HTTP 403; no permissions or check protections changed.
+  Local `main` was fast-forwarded. The next unsigned prerelease is planned as
+  `v0.2.0-alpha.3`; tag absence was verified before preparation.
 - The 2026-10-24 runtime commit `c4b4287` and memory commit `c8fe6dd` are pushed to
   `codex/native-execution-diagnostics` in now-merged
   [PR #16](https://github.com/vistadi/dildin-build-control/pull/16) targeting `main`.
@@ -205,8 +210,8 @@ installation, live-provider fixture or native-window end-to-end QA was performed
 
 Next priorities after the approved 2026-10-24 implementation milestone:
 
-1. Review open PR #18 and its exact-head CI/CodeQL; validate
-   packaged native-window IPC/restart and pinned Kimi/Qwen contracts;
+1. Complete the approved alpha.3 release and verify both architectures and published
+   checksums; then validate packaged native-window IPC/restart and pinned Kimi/Qwen contracts;
    keep existing blocked/zero-tool profiles until replacement safeguards are verified.
 2. Prototype one interactive agent integration (Kimi ACP or Codex app-server) with
    DBC-owned approval, cancellation, session identity, and evidence. ACP is not MCP

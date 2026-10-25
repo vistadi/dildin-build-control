@@ -1,15 +1,35 @@
 # DBC Active Plans
 
+## 2026-10-25 — PR #18 merge and alpha.3 release
+
+Status: PR #18 merged into `main` as `66dcf66`; release preparation is in progress.
+The maintainer explicitly requested merge and release, superseding the previous
+publication-only restriction. Five exact-head checks passed, including aggregate
+CodeQL with no new alerts; review and review-thread lists were empty.
+
+1. Merge the verified PR without bypassing checks — completed through the signed-in
+   browser after the connector returned HTTP 403; API confirmed the merge.
+2. Prepare `v0.2.0-alpha.3` changelog and correct the signing guide to match the
+   unsigned workflow. Keep numeric package/Tauri/Cargo versions at `0.2.0`.
+3. The maintainer approved both proposed release-preparation/outcome memory commits,
+   push to `main` and the new tag on 2026-10-25. Inspect their exact file groups,
+   then commit and push.
+4. Push the new immutable tag only after release metadata validation. Check the
+   quality gate, both macOS jobs, six release assets and DMG checksum manifests.
+5. Record actual publication results. Do not replace the installed application or
+   claim native-window end-to-end, Developer ID signing or notarization verification.
+
+Evidence and pending checks: `memory/worklog/2026-10-25-pr18-merge-and-alpha3-release.md`.
+
 ## 2026-10-24 — Durable Stop/Resume
 
-Status: implemented and locally verified on `codex/durable-stop-resume`, based on
-merged PR #16 (`3b21f74`). Runtime commit `5110d0a` is pushed in open
-[PR #18](https://github.com/vistadi/dildin-build-control/pull/18). The maintainer
-approved both implementation and memory commits, push and this new PR, explicitly
-excluding merge and release. This checkpoint records publication; final-head
-CI/CodeQL and review remain required. See `memory/worklog/2026-10-24-durable-stop-resume.md` for
-inventory, 60 Rust tests, frontend/native builds, browser QA and remaining native-window
-verification. No live provider, release or installation was performed.
+Status: implemented, locally verified and merged through
+[PR #18](https://github.com/vistadi/dildin-build-control/pull/18) as `66dcf66` on
+2026-10-25 after all five checks passed at head `9c1cebc`. The original publication
+approval excluded merge/release; the later explicit request authorized both.
+See `memory/worklog/2026-10-24-durable-stop-resume.md` for inventory, 60 Rust tests,
+frontend/native builds, browser QA and remaining native-window verification.
+Release preparation is tracked above; no live provider or installation was performed.
 
 1. Persist stopping/stopped/interrupted states; serialize transitions and distinguish
    queued work from an executing attempt. Never auto-replay work after interruption.

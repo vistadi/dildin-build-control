@@ -1,8 +1,9 @@
 # macOS Signing and Notarization
 
 DBC release builds can be signed and notarized by Tauri’s macOS bundling flow
-when the repository secrets below are configured. Do not commit certificates,
-passwords, private keys, or notarization credentials.
+after an explicitly configured and verified signed-release workflow is in place.
+The current alpha workflow is unsigned. Do not commit certificates, passwords,
+private keys, or notarization credentials.
 
 ## Required GitHub Secrets
 
@@ -13,8 +14,13 @@ passwords, private keys, or notarization credentials.
 - `APPLE_PASSWORD`: app-specific password for that account.
 - `APPLE_TEAM_ID`: Apple Developer team identifier.
 
-The release workflow passes these names to `tauri-apps/tauri-action`. Empty
-secrets keep the current unsigned-alpha behavior; a release must not be described
+The current `.github/workflows/release.yml` deliberately does not pass these
+variables to `tauri-apps/tauri-action`. Adding repository secrets alone does not
+enable signing. Empty signing/notarization variables previously caused alpha
+packaging failures; keep them omitted on the unsigned path.
+
+To enable a future signed release, explicitly configure the workflow to supply
+verified credentials and test both architectures. A release must not be described
 as signed until the verification commands below pass on the published artifact.
 
 ## Local Secret Preparation
