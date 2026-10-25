@@ -2,22 +2,24 @@
 
 ## 2026-10-25 — PR #19 merge and alpha.4 release
 
-Status: PR #19 merged as `4668e81`; the maintainer explicitly approved both release
-commit inventories, push to main and the new alpha.4 tag. Release execution is pending.
-The maintainer requested merge and release,
+Status: completed. PR #19 merged as `4668e81`; unsigned prerelease `v0.2.0-alpha.4`
+is published from `06a7ea5`. The maintainer explicitly approved both release
+commit inventories, push to main and the new alpha.4 tag, and requested merge/release,
 superseding the earlier no-merge/no-release restriction for this operation only.
 
 1. Recheck exact-head CI, CodeQL, review threads and mergeability — completed at
    `af986ad`: all five checks passed, no new alerts and no review threads.
 2. Merge preserving commits and fast-forward local main — completed. Browser merge
    succeeded after connector HTTP 403; no permissions or check protections changed.
-3. Prepare `v0.2.0-alpha.4` changelog and project memory. Numeric versions stay 0.2.0;
-   the next tag was verified absent. Metadata/diff checks and explicit approval completed.
-4. Commit/push main and the new tag; verify Release quality, both
-   architecture jobs, six public assets and checksum manifests.
-5. Record verified outcomes in the second memory-only commit. No installed-app update,
+3. Release changelog and memory committed/pushed as `06a7ea5`; numeric versions stay
+   0.2.0. New annotated tag points to that exact commit; no existing tag changed.
+4. Release `40200589766`, CI `40200564567` and CodeQL `40200564547` passed. Both
+   architecture jobs, six downloaded assets, manifests and DMG integrity passed.
+   Static Mach-O and embedded tag/full-SHA verification passed for both builds.
+5. Verified outcomes recorded in the approved second memory-only checkpoint. No installed-app update,
    signing claims, live-provider tests, old-tag rewrite or branch deletion.
 
+Release: <https://github.com/vistadi/dildin-build-control/releases/tag/v0.2.0-alpha.4>.
 Evidence: `memory/worklog/2026-10-25-pr19-merge-and-alpha4-release.md`.
 
 ## 2026-10-25 — Native Retry confirmation and lifecycle status

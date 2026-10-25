@@ -3,8 +3,12 @@
 Last verified repository/release update: 2026-10-25. PR #19 merged into `main` as
 `4668e8122b89d9d77a50e6a8f0911cd679674179` after all five exact-head CI/CodeQL checks
 passed at `af986ad`, with no new CodeQL alerts and no review threads. Release
-`v0.2.0-alpha.4` is being prepared; both release/memory commits, push and tag are approved.
-It is not yet tagged or published. PR #18 previously merged into `main` as
+`v0.2.0-alpha.4` is published from `06a7ea5c3171305ce58cc534487696698df96917`.
+Release quality (60 Rust tests), both macOS packaging jobs, CI and CodeQL passed.
+All six downloaded assets match published sizes/digests; both manifests and DMG
+integrity checks passed. Static inspection confirmed architecture, alpha.4 label
+and full release SHA in both binaries. No alpha.4 application was launched or installed.
+PR #18 previously merged into `main` as
 `66dcf66`, including PR #16 and durable Stop/Resume. Unsigned macOS prerelease
 `v0.2.0-alpha.3` is published from `2904b206360cad628370639e9e85259063177eb5`.
 CI, CodeQL, release quality and both macOS packaging jobs passed. All six downloaded
@@ -22,7 +26,7 @@ arm64 desktop QA passed Cancel/Escape without mutation and confirmed Retry throu
 completion without replaying completed steps. Code `2ac67f5`, installation report
 `1d4863b` and memory `af986ad` are preserved in merged
 [PR #19](https://github.com/vistadi/dildin-build-control/pull/19).
-The fix is merged but not released; alpha.4 publication is pending.
+The fix is merged and included in alpha.4, but installed alpha.3 still lacks it.
 Original user data was restored
 after preserving the QA session separately; alpha.3 remains installed and running.
 Live-provider, forced-crash and second-instance QA remain unperformed. See the
@@ -128,6 +132,17 @@ Live-provider, forced-crash and second-instance QA remain unperformed. See the
 
 ## Distribution state
 
+- [Release v0.2.0-alpha.4](https://github.com/vistadi/dildin-build-control/releases/tag/v0.2.0-alpha.4)
+  is published as non-draft prerelease `423444531` at `2026-10-25T14:11:38Z` from
+  `06a7ea5`. New annotated tag object `4037665652703b1d7eda0df070480baf3e26168d`
+  points to the full release SHA above. Release `40200589766`, CI `40200564567`
+  and CodeQL `40200564547` passed. All six public assets were downloaded and
+  verified by size/SHA-256; both manifests, DMG integrity and binary architecture/
+  embedded build identities passed. DMG SHA-256: arm64
+  `7db70dca15caf2cf632fc4445c55a3b479dc2e4b2802399050fdee5ce25c74eb`;
+  x64 `494c8630cf10ded08a98571081e7c52b501e9cff5a60bab3f3c286cd262d5cbb`.
+  This is artifact-level verification, not a new native-window or Intel launch test.
+  Distribution remains unsigned/non-notarized; installed alpha.3 and backups are unchanged.
 - [PR #19](https://github.com/vistadi/dildin-build-control/pull/19) merged into main
   at `2026-10-25T12:54:34Z` as `4668e81`, preserving all three commits. Exact-head
   CI `40193630062` and CodeQL `40193630001` passed; aggregate check `121169909195`
@@ -236,7 +251,8 @@ Live-provider, forced-crash and second-instance QA remain unperformed. See the
   stopped/interrupted legacy loops. The merged fix now uses the selected loop's
   actual status, falling back to the HarnessRun status only without a selected loop.
   Desktop QA verified Interrupted, Running, Completed and Stopped; browser tests
-  also cover approval/budget/pending states. No new release was created.
+  also cover approval/budget/pending states. The fix is now released in alpha.4;
+  installed alpha.3 remains unchanged.
 - Native installation QA used the advanced legacy-loop path and mock adapters only.
   It did not certify live provider cancellation, crash-surviving descendants,
   second-instance exclusion, Intel launch, or the complete Guided Harness journey.
@@ -268,11 +284,11 @@ Live-provider, forced-crash and second-instance QA remain unperformed. See the
 
 ## Immediate priorities
 
-Next priorities after the verified 2026-10-25 alpha.3 release:
+Next priorities after the verified 2026-10-25 alpha.4 release:
 
-1. Complete the approved alpha.4 release, verify both architecture assets,
-   then cover real-process cancellation, forced recovery
-   and second-instance behavior.
+1. With separate approval, update the installed application to verified alpha.4,
+   preserving matching app/data rollback copies and checking native Cancel/Retry.
+   Then cover real-process cancellation, forced recovery and second-instance behavior.
    Validate pinned Kimi/Qwen contracts without weakening blocked/zero-tool profiles.
 2. Prototype one interactive agent integration (Kimi ACP or Codex app-server) with
    DBC-owned approval, cancellation, session identity, and evidence. ACP is not MCP
