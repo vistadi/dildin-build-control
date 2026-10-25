@@ -674,3 +674,39 @@ and Stop/Resume operator documentation. No Rust execution or persistence change.
 Separate arm64 desktop mock QA passed Cancel/Escape and explicit Retry. Installed
 alpha.3 remains unchanged until a separately approved build/update. This extends the
 2026-10-24 durable-lifecycle decision without weakening its guarantees or boundaries.
+
+## 2026-10-25 — Merge native Retry fix and prepare alpha.4
+
+Status: accepted
+
+### Context
+
+After PR #19's five exact-head checks passed, the maintainer explicitly requested
+merge and release. This supersedes the earlier publication-only restriction for
+this operation; prior implementation/QA decisions remain unchanged.
+
+### Decision
+
+Merge PR #19 preserving its three commits, then prepare the next unused tag
+`v0.2.0-alpha.4` through the existing unsigned arm64/x64 release workflow. Keep
+package, Tauri and Cargo numeric versions at `0.2.0` and embed the tag as build label.
+The maintainer explicitly approved both presented release-preparation and outcome-memory
+commit inventories, push to main and the new tag on 2026-10-25. Do not update the
+installed application.
+
+### Rationale
+
+The native Retry/status fix is bounded, locally desktop-tested and green in CI and
+CodeQL. Apple credentials remain unavailable; an unsigned prerelease preserves the
+established distribution channel without claiming stable or signed certification.
+
+### Affected modules
+
+CHANGELOG, persistent project memory, Git merge/tag and existing release workflow.
+No runtime implementation, provider permissions or signing configuration changes.
+
+### Consequences
+
+Do not rewrite old tags, bypass checks or claim the debug QA bundle certifies every
+release binary. Verify published artifacts and checksums for both architectures.
+Installed alpha.3 and its private rollback snapshots remain untouched.

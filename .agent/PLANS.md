@@ -1,11 +1,32 @@
 # DBC Active Plans
 
+## 2026-10-25 — PR #19 merge and alpha.4 release
+
+Status: PR #19 merged as `4668e81`; the maintainer explicitly approved both release
+commit inventories, push to main and the new alpha.4 tag. Release execution is pending.
+The maintainer requested merge and release,
+superseding the earlier no-merge/no-release restriction for this operation only.
+
+1. Recheck exact-head CI, CodeQL, review threads and mergeability — completed at
+   `af986ad`: all five checks passed, no new alerts and no review threads.
+2. Merge preserving commits and fast-forward local main — completed. Browser merge
+   succeeded after connector HTTP 403; no permissions or check protections changed.
+3. Prepare `v0.2.0-alpha.4` changelog and project memory. Numeric versions stay 0.2.0;
+   the next tag was verified absent. Metadata/diff checks and explicit approval completed.
+4. Commit/push main and the new tag; verify Release quality, both
+   architecture jobs, six public assets and checksum manifests.
+5. Record verified outcomes in the second memory-only commit. No installed-app update,
+   signing claims, live-provider tests, old-tag rewrite or branch deletion.
+
+Evidence: `memory/worklog/2026-10-25-pr19-merge-and-alpha4-release.md`.
+
 ## 2026-10-25 — Native Retry confirmation and lifecycle status
 
 Status: implemented, locally verified and published in
 [PR #19](https://github.com/vistadi/dildin-build-control/pull/19) from
 `codex/native-retry-confirmation`. Maintainer approved fixes,
-desktop Cancel/Retry QA, commits, push and a separate PR; no merge or release.
+desktop Cancel/Retry QA, commits, push and a separate PR; that initial scope excluded
+merge/release. The later explicit request authorized merge/release as recorded above.
 The previously approved installation report is committed as `1d4863b`.
 
 1. In-app confirmation bound to the current attempt; Cancel/Escape do no work — passed.
@@ -13,9 +34,11 @@ The previously approved installation report is committed as `1d4863b`.
 3. 60 Rust tests, 11 lifecycle scenarios, frontend/native builds, existing smoke
    gates and 375/768/1440 controls passed. Native Cancel/Escape retained identical
    SQLite metadata/evidence; Confirm retry completed the interrupted mock loop once.
-4. Code `2ac67f5` and installation report `1d4863b` are pushed; PR #19 is open.
-   Created through the signed-in browser after connector HTTP 403. No permissions,
-   installed alpha.3, merge or release changed. Remote checks remain the PR gate.
+4. Code `2ac67f5`, report `1d4863b` and memory `af986ad` are pushed; PR #19 is now
+   merged as `4668e81` after the later request.
+   PR creation used the signed-in browser after connector HTTP 403. The initial
+   publication did not merge/release or change installed alpha.3; the subsequent
+   approved merge and release preparation are recorded above.
 
 Evidence: `memory/worklog/2026-10-25-native-retry-confirmation.md`.
 

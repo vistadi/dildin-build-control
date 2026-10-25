@@ -1,6 +1,10 @@
 # DBC Project State
 
-Last verified repository/release update: 2026-10-25. PR #18 merged into `main` as
+Last verified repository/release update: 2026-10-25. PR #19 merged into `main` as
+`4668e8122b89d9d77a50e6a8f0911cd679674179` after all five exact-head CI/CodeQL checks
+passed at `af986ad`, with no new CodeQL alerts and no review threads. Release
+`v0.2.0-alpha.4` is being prepared; both release/memory commits, push and tag are approved.
+It is not yet tagged or published. PR #18 previously merged into `main` as
 `66dcf66`, including PR #16 and durable Stop/Resume. Unsigned macOS prerelease
 `v0.2.0-alpha.3` is published from `2904b206360cad628370639e9e85259063177eb5`.
 CI, CodeQL, release quality and both macOS packaging jobs passed. All six downloaded
@@ -15,10 +19,10 @@ post-interruption continuation is not certified for that released build. A subse
 fix on `codex/native-retry-confirmation` replaces native confirm with an in-app
 Cancel/Confirm retry panel and displays the actual selected run status. Separate
 arm64 desktop QA passed Cancel/Escape without mutation and confirmed Retry through
-completion without replaying completed steps. Code `2ac67f5` and the approved
-installation report `1d4863b` are pushed in open
+completion without replaying completed steps. Code `2ac67f5`, installation report
+`1d4863b` and memory `af986ad` are preserved in merged
 [PR #19](https://github.com/vistadi/dildin-build-control/pull/19).
-The fix is not merged or released; remote checks are tracked on that PR.
+The fix is merged but not released; alpha.4 publication is pending.
 Original user data was restored
 after preserving the QA session separately; alpha.3 remains installed and running.
 Live-provider, forced-crash and second-instance QA remain unperformed. See the
@@ -124,6 +128,13 @@ Live-provider, forced-crash and second-instance QA remain unperformed. See the
 
 ## Distribution state
 
+- [PR #19](https://github.com/vistadi/dildin-build-control/pull/19) merged into main
+  at `2026-10-25T12:54:34Z` as `4668e81`, preserving all three commits. Exact-head
+  CI `40193630062` and CodeQL `40193630001` passed; aggregate check `121169909195`
+  found no new alerts. The signed-in browser performed a normal merge after the
+  connector returned HTTP 403. No protection or permission changed. Local main was
+  fast-forwarded; the feature branch was retained. Alpha.4 preparation changes only
+  release documentation and memory, not runtime code or numeric package versions.
 - [PR #18](https://github.com/vistadi/dildin-build-control/pull/18) merged into `main`
   on 2026-10-25 as `66dcf66`, preserving runtime `5110d0a` and memory `9c1cebc`.
   Exact-head CI `40127899814` and CodeQL `40127899761` passed, as did aggregate
@@ -219,10 +230,10 @@ Live-provider, forced-crash and second-instance QA remain unperformed. See the
   `Retry step`: mouse and keyboard activation produce no confirmation or new attempt.
   That release's handler uses `window.confirm` (`src/App.tsx`); locked Wry 0.55.1 macOS
   WKUIDelegate has no JavaScript-confirm handler, consistent with the observed
-  failure. The subsequent branch fix passed native mock Cancel/Retry QA, but is not
+  failure. The subsequent merged fix passed native mock Cancel/Retry QA, but is not
   included in installed alpha.3. No fix was applied during the earlier installation.
 - Released alpha.3's Harness Runs helper badge incorrectly says Running for
-  stopped/interrupted legacy loops. The branch fix now uses the selected loop's
+  stopped/interrupted legacy loops. The merged fix now uses the selected loop's
   actual status, falling back to the HarnessRun status only without a selected loop.
   Desktop QA verified Interrupted, Running, Completed and Stopped; browser tests
   also cover approval/budget/pending states. No new release was created.
@@ -259,8 +270,8 @@ Live-provider, forced-crash and second-instance QA remain unperformed. See the
 
 Next priorities after the verified 2026-10-25 alpha.3 release:
 
-1. Review PR #19 and its remote checks, without merge or release until separately
-   approved. Then cover real-process cancellation, forced recovery
+1. Complete the approved alpha.4 release, verify both architecture assets,
+   then cover real-process cancellation, forced recovery
    and second-instance behavior.
    Validate pinned Kimi/Qwen contracts without weakening blocked/zero-tool profiles.
 2. Prototype one interactive agent integration (Kimi ACP or Codex app-server) with

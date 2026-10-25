@@ -12,6 +12,35 @@ The project follows [Semantic Versioning](https://semver.org/) while release sta
 - Installed-version Kimi/Qwen fixtures and approved remote OAuth MCP conformance.
 - A compact Guided Run demo video or GIF.
 
+## [0.2.0-alpha.4] - 2026-10-25
+
+### Fixed
+
+- Native Retry now uses an in-app Cancel / Confirm retry panel instead of a browser
+  confirmation that did not appear in the macOS WebView. Cancel is focused first;
+  Cancel and Escape do not start work and restore focus to the Retry button.
+- Retry confirmation is bound to the selected loop, workspace, step, lifecycle and
+  attempt budget. Changed targets or pending actions invalidate it; duplicate clicks
+  cannot submit a second retry. Backend approval and attempt limits remain enforced.
+- Loop Console's helper badge and run-state summary show the selected loop's actual
+  status, including Stopped, Interrupted and Completed, instead of inferring Running
+  from the existence of a run or an unrelated historical HarnessRun.
+
+### Verification and release boundaries
+
+- Regression coverage includes 11 lifecycle scenarios, 19 UI contract assertions,
+  existing native/provider/MCP/API gates and 60 Rust tests.
+- A separate arm64 desktop QA build verified Cancel/Escape without SQLite or evidence
+  changes, explicit Retry to completion without replaying earlier steps, and correct
+  Interrupted, Running, Completed and Stopped statuses. Responsive component checks
+  passed at 375/768/1440 widths. That debug-build QA is not release-binary certification.
+- This remains an unsigned, non-notarized macOS prerelease for Apple Silicon and Intel.
+  Verify release checksums before installation. No live-provider, forced-crash,
+  crash-surviving-process, Intel-window or second-instance certification is implied.
+- Stop is not rollback. Inspect workspace changes and external processes before
+  retrying: side effects may repeat. Close older DBC instances before launch and
+  preserve matching application/data backups before changing versions.
+
 ## [0.2.0-alpha.3] - 2026-10-25
 
 ### Added
