@@ -1,3 +1,4 @@
+import { parseProviders } from "./lib/providers.mjs";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -154,20 +155,6 @@ function providerSummary(provider) {
   };
 }
 
-function parseProviders(text) {
-  const blocks = text.split(/\n  - id: /).slice(1);
-  return blocks.map((block) => {
-    const lines = block.split("\n");
-    const provider = { id: unquote(lines[0].trim()) };
-    for (const line of lines.slice(1)) {
-      const match = line.match(/^    ([A-Za-z0-9_]+):\s*(.*)$/);
-      if (!match) continue;
-      provider[match[1]] = unquote(match[2].trim());
-    }
-    return provider;
-  });
-}
-
 function readJsonIfExists(filePath) {
   return filePath && existsSync(filePath) ? JSON.parse(readFileSync(filePath, "utf8")) : undefined;
 }
@@ -184,11 +171,6 @@ function warn(subject, detail) {
 function fail(subject, detail) {
   blockers.push({ subject, detail });
   checks.push({ level: "error", subject, detail });
-}
-
-function unquote(value) {
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) return value.slice(1, -1);
-  return value;
 }
 
 function markdown(value) {

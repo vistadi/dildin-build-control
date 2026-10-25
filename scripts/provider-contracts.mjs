@@ -1,3 +1,4 @@
+import { parseProviders } from "./lib/providers.mjs";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -81,7 +82,7 @@ function checkProviderContract(provider) {
     return record(provider, providerKind, resolvedCommand, normalizedArgsTemplate, promptMode, effectiveArgs, diagnostics);
   }
 
-  if (provider.enabled !== "true") {
+  if (provider.enabled !== true) {
     warn(diagnostics, "enabled", "Provider is disabled; contract is informational.");
   } else {
     ok(diagnostics, "enabled", "Provider is enabled.");
@@ -184,7 +185,7 @@ function record(provider, providerKind, resolvedCommand, normalizedArgsTemplate,
     id: provider.id,
     name: provider.name || provider.id,
     type: provider.type || "cli",
-    enabled: provider.enabled === "true",
+    enabled: provider.enabled === true,
     runMode: provider.runMode || "mock",
     providerKind,
     command: provider.command || "",
@@ -282,32 +283,6 @@ function run(command, args) {
   };
 }
 
-function parseProviders(text) {
-  const blocks = text.split(/\n  - id: /).slice(1);
-  return blocks.map((block) => {
-    const lines = block.split("\n");
-    const provider = { id: unquote(lines[0].trim()) };
-    let currentArray = "";
-    for (const line of lines.slice(1)) {
-      const arrayItem = line.match(/^      -\s*(.*)$/);
-      if (arrayItem && currentArray) {
-        provider[currentArray].push(unquote(arrayItem[1].trim()));
-        continue;
-      }
-      const match = line.match(/^    ([A-Za-z0-9_]+):\s*(.*)$/);
-      if (!match) continue;
-      currentArray = "";
-      if (match[2].trim() === "") {
-        currentArray = match[1];
-        provider[currentArray] = [];
-      } else {
-        provider[match[1]] = unquote(match[2].trim());
-      }
-    }
-    return provider;
-  });
-}
-
 function splitCommandLine(input) {
   const args = [];
   let current = "";
@@ -380,11 +355,6 @@ function trim(value, length) {
 
 function capitalize(value) {
   return value ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
-}
-
-function unquote(value) {
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) return value.slice(1, -1);
-  return value;
 }
 
 function markdown(value) {

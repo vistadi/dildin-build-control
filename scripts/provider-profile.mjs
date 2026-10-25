@@ -1,3 +1,4 @@
+import { parseProviders, providerProfile } from "./lib/providers.mjs";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -40,11 +41,9 @@ switch (action) {
 function generateProfiles() {
   const source = readFileSync(providersPath, "utf8");
   const generatedAt = String(Date.now());
-  const mock = withUpdatedAt(setRunModes(source, () => "mock"), generatedAt);
-  const realMicro = withUpdatedAt(
-    setRunModes(source, (id, current) => (["codex_cli", "claude_code", "local_terminal"].includes(id) ? "real" : current || "mock")),
-    generatedAt,
-  );
+  const mock = providerProfile(source, () => "mock", generatedAt);
+  const realMicro = providerProfile(source,
+    (id, current) => (["codex_cli", "claude_code", "local_terminal"].includes(id) ? "real" : current || "mock"), generatedAt);
   writeFileSync(mockPath, profileHeader("mock", generatedAt) + mock);
   writeFileSync(realMicroPath, profileHeader("real-micro", generatedAt) + realMicro);
   console.log(
@@ -160,49 +159,6 @@ function fail(message) {
   process.exit(1);
 }
 
-function setRunModes(text, resolveMode) {
-  const lines = text.split("\n");
-  let currentId = "";
-  return lines
-    .map((line) => {
-      const idMatch = line.match(/^  - id:\s*(.+)$/);
-      if (idMatch) currentId = unquote(idMatch[1].trim());
-      const runModeMatch = line.match(/^    runMode:\s*(.+)$/);
-      if (!runModeMatch || !currentId) return line;
-      const currentMode = unquote(runModeMatch[1].trim());
-      return `    runMode: ${resolveMode(currentId, currentMode)}`;
-    })
-    .join("\n");
-}
-
-function withUpdatedAt(text, value) {
-  if (text.match(/^updatedAt:/m)) {
-    return text.replace(/^updatedAt:\s*.*$/m, `updatedAt: "${value}"`);
-  }
-  return text.replace(/^kind:\s*providers$/m, `kind: providers\nupdatedAt: "${value}"`);
-}
-
 function profileHeader(name, generatedAt) {
   return `# DBC provider profile: ${name}\n# Generated: ${generatedAt}\n# Apply explicitly with pnpm providers:apply-${name === "mock" ? "mock" : "real-micro"}.\n`;
-}
-
-function parseProviders(text) {
-  const blocks = text.split(/\n  - id: /).slice(1);
-  return blocks.map((block) => {
-    const lines = block.split("\n");
-    const provider = { id: lines[0].trim() };
-    for (const line of lines.slice(1)) {
-      const match = line.match(/^    ([A-Za-z0-9_]+):\s*(.*)$/);
-      if (!match) continue;
-      provider[match[1]] = unquote(match[2].trim());
-    }
-    return provider;
-  });
-}
-
-function unquote(value) {
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    return value.slice(1, -1);
-  }
-  return value;
 }

@@ -3529,6 +3529,9 @@ fn generate_release_package(
 ) -> Result<ReleasePackageResult, String> {
     let project = PathBuf::from(&request.project_path);
     let tauri_config_path = project.join("src-tauri").join("tauri.conf.json");
+    if !tauri_config_path.exists() {
+        return Err("This project has no Tauri distribution configuration. A release package is optional for task execution; use the project readiness checklist instead.".to_string());
+    }
     let tauri_config_text =
         fs::read_to_string(&tauri_config_path).map_err(|err| err.to_string())?;
     let tauri_config: serde_json::Value =
@@ -3694,7 +3697,7 @@ fn generate_operator_checklist(
     operator_check_readiness(&readiness, &mut checks, &mut blockers, &mut warnings);
     operator_check_real_plan(&real_plan, &mut checks, &mut blockers);
     operator_check_comparison(&comparison, &mut checks, &mut blockers, &mut warnings);
-    operator_check_release(&release, &mut checks, &mut blockers);
+    operator_distribution_evidence(&release, &mut checks);
     operator_check_providers(&providers, &mut checks, &mut blockers);
 
     let active_real_providers: Vec<serde_json::Value> = providers
@@ -3805,15 +3808,14 @@ fn generate_operator_checklist(
         }),
         serde_json::json!({
             "id": "review-reports",
-            "title": "Review readiness, plan, comparison, and release evidence",
+            "title": "Review project readiness, plan and comparison",
             "files": [
                 readiness_path.display().to_string(),
                 real_plan_path.display().to_string(),
-                comparison_path.display().to_string(),
-                release_path.display().to_string()
+                comparison_path.display().to_string()
             ],
             "expectedEvidence": "No blockers; warnings are understood by the operator.",
-            "stopIf": "Any report is missing, blocked, or refers to a stale task/release."
+            "stopIf": "A required project report is missing, blocked, or refers to a stale task. Distribution evidence is informational."
         }),
         serde_json::json!({
             "id": "apply-real-profile",
@@ -8471,40 +8473,21 @@ fn operator_check_comparison(
     }
 }
 
-fn operator_check_release(
+fn operator_distribution_evidence(
     value: &Option<serde_json::Value>,
     checks: &mut Vec<serde_json::Value>,
-    blockers: &mut Vec<serde_json::Value>,
 ) {
-    let Some(report) = value else {
-        operator_fail(blockers, checks, "release", "Release package is missing.");
-        return;
-    };
-    let failed = report
-        .get("checklist")
+    let complete = value
+        .as_ref()
+        .and_then(|report| report.get("checklist"))
         .and_then(|value| value.as_object())
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|(key, value)| (value != true).then_some(key.to_string()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|| vec!["checklist".to_string()]);
-    if failed.is_empty() {
-        let checksum = report
-            .get("checksums")
-            .and_then(|value| value.get("dmg"))
-            .and_then(|value| value.as_str())
-            .unwrap_or("missing");
-        operator_pass(checks, "release", &format!("Release checksum {checksum}."));
+        .is_some_and(|items| !items.is_empty() && items.values().all(|value| value == true));
+    let detail = if complete {
+        "Local distribution artifacts are recorded; this is not a task execution or signing approval."
     } else {
-        operator_fail(
-            blockers,
-            checks,
-            "release",
-            &format!("Release checklist has failing items: {}", failed.join(", ")),
-        );
-    }
+        "No complete local distribution package. Not required for project tasks; publishing/signing remain separately gated."
+    };
+    checks.push(serde_json::json!({"level": "info", "subject": "distribution (informational)", "detail": detail}));
 }
 
 fn operator_check_providers(
@@ -10907,6 +10890,87 @@ mod tests {
 
         assert!(validate_real_loop_launch(&request).is_ok());
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn native_provider_yaml_matches_shared_node_fixture() {
+        let fixture = include_str!("../../scripts/fixtures/providers-native-sync.yaml");
+        let value: serde_json::Value = serde_yaml::from_str(fixture).unwrap();
+        assert_eq!(json_to_yaml(&value), fixture);
+    }
+
+    #[test]
+    fn generic_project_operator_does_not_require_dbc_distribution() {
+        let dir = temp_project_dir();
+        let dbc = dir.join(".dbc");
+        for folder in ["readiness", "real-loop", "compare"] {
+            fs::create_dir_all(dbc.join(folder)).unwrap();
+        }
+        let providers = serde_json::json!({
+            "version": 1, "kind": "providers", "providers":
+            (["codex_cli", "claude_code", "local_terminal"].map(|id| serde_json::json!({
+                "id": id, "type": if id == "local_terminal" { "local_runner" } else { "cli" },
+                "command": std::env::current_exe().unwrap().display().to_string(), "runMode": "mock"
+            })))
+        });
+        for file in [
+            "providers.yaml",
+            "providers.mock.yaml",
+            "providers.real-micro.yaml",
+        ] {
+            fs::write(dbc.join(file), json_to_yaml(&providers)).unwrap();
+        }
+        fs::write(
+            dbc.join("readiness/latest.json"),
+            r#"{"status":"ready","blockers":[]}"#,
+        )
+        .unwrap();
+        fs::write(dbc.join("real-loop/latest.json"), r#"{"status":"prepared","blockers":[],"task":{"id":"REAL-MICRO-README","budgetLimit":2}}"#).unwrap();
+        fs::write(
+            dbc.join("compare/latest.json"),
+            r#"{"status":"pending_real","blockers":[]}"#,
+        )
+        .unwrap();
+        let report = generate_operator_checklist(ReleasePackageRequest {
+            project_path: dir.display().to_string(),
+        })
+        .unwrap();
+        assert_eq!(report.blockers, 0);
+        assert_eq!(report.status, "awaiting_human_approval");
+        assert!(!dbc.join("release/latest.json").exists());
+        assert!(ensure_real_micro_profile_approval(&dbc).is_err());
+
+        fs::write(
+            dbc.join("readiness/latest.json"),
+            r#"{"status":"blocked","blockers":[{"subject":"baseline","detail":"failed"}]}"#,
+        )
+        .unwrap();
+        let blocked = generate_operator_checklist(ReleasePackageRequest {
+            project_path: dir.display().to_string(),
+        })
+        .unwrap();
+        assert!(blocked.blockers > 0);
+        assert_eq!(blocked.status, "blocked");
+        assert!(ensure_real_micro_profile_approval(&dbc).is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn distribution_evidence_is_informational_even_when_incomplete() {
+        for value in [
+            None,
+            Some(serde_json::json!({"checklist":{}})),
+            Some(serde_json::json!({"checklist":{"appExists":false}})),
+        ] {
+            let mut checks = Vec::new();
+            operator_distribution_evidence(&value, &mut checks);
+            assert_eq!(checks.len(), 1);
+            assert_eq!(checks[0]["level"], "info");
+            assert!(checks[0]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("Not required for project tasks"));
+        }
     }
 
     #[test]
